@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Local MCP Apps host</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 0; background: #212121; color: #eee; }
+      header { padding: 10px 16px; font-size: 13px; background: #171717; display: flex; gap: 12px; align-items: center; }
+      #log { font: 12px ui-monospace, monospace; padding: 8px 16px; color: #9ca3af; white-space: pre-wrap; max-height: 120px; overflow: auto; }
+      #frame-wrap { margin: 16px auto; max-width: 780px; border-radius: 16px; overflow: hidden; border: 1px solid #333; }
+      #frame-wrap.fs { position: fixed; inset: 0; max-width: none; margin: 0; border-radius: 0; z-index: 9; }
+      iframe { display: block; width: 100%; height: 620px; border: 0; background: #fff; }
+      #frame-wrap.fs iframe { height: 100vh; }
+    </style>
+  </head>
+  <body>
+    <header><b>Local MCP Apps host</b><span>— simulates how ChatGPT loads the widget from <code>/mcp</code></span></header>
+    <div id="log"></div>
+    <div id="frame-wrap"><iframe id="app" sandbox="allow-scripts allow-same-origin"></iframe></div>
+    <script type="module" src="./host.ts"></script>
+  </body>
+</html>
