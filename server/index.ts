@@ -1,7 +1,7 @@
 // Local server: the same app plus static files (on Vercel, public/ is served by the CDN).
 import express from "express";
 import { existsSync } from "node:fs";
-import app from "./app";
+import app from "../server";
 
 const PORT = Number(process.env.PORT ?? 8787);
 
