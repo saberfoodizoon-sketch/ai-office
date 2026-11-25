@@ -5,7 +5,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { OfficeData } from "../shared/types";
+import type { OfficeData } from "../shared/types.js";
 
 export interface Store {
   load(): Promise<OfficeData | null>;

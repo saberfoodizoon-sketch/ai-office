@@ -3,10 +3,10 @@
 // server/index.ts runs the same app locally.
 import express from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { MockBrain } from "./engine/brain";
-import { Office } from "./engine/office";
-import { defaultStore } from "./engine/store";
-import { createMcpServer } from "./server/mcp";
+import { MockBrain } from "./engine/brain.js";
+import { Office } from "./engine/office.js";
+import { defaultStore } from "./engine/store.js";
+import { createMcpServer } from "./server/mcp.js";
 
 const SPEED = Number(process.env.WORK_SPEED ?? 1);
 // Origin the widget is served under (used in its MCP Apps metadata).

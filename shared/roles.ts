@@ -1,4 +1,4 @@
-import type { RoleId } from "./types";
+import type { RoleId } from "./types.js";
 
 export interface RoleInfo {
   id: RoleId;

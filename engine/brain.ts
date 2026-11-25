@@ -4,8 +4,8 @@
 // the whole office works without any AI provider. To use a real model later,
 // implement `Brain` with LLM calls (one per method) and pass it to `new Office()`.
 
-import { ROLES, WORKER_ROLES, classifyRole, scoreRole } from "../shared/roles";
-import type { Employee, RoleId } from "../shared/types";
+import { ROLES, WORKER_ROLES, classifyRole, scoreRole } from "../shared/roles.js";
+import type { Employee, RoleId } from "../shared/types.js";
 
 export interface PlannedSubtask {
   assigneeId: string;

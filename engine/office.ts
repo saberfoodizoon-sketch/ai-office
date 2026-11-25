@@ -4,8 +4,8 @@
 // without the server running timers.
 
 import { randomUUID } from "node:crypto";
-import { ROLES } from "../shared/roles";
-import { DESK_COUNT } from "../shared/layout";
+import { ROLES } from "../shared/roles.js";
+import { DESK_COUNT } from "../shared/layout.js";
 import type {
   Activity,
   Employee,
@@ -18,9 +18,9 @@ import type {
   SubtaskView,
   Task,
   TaskView,
-} from "../shared/types";
-import type { Brain } from "./brain";
-import type { Store } from "./store";
+} from "../shared/types.js";
+import type { Brain } from "./brain.js";
+import type { Store } from "./store.js";
 
 const PLANNING_MS = 12_000;
 const REVIEW_MS = 4_000;

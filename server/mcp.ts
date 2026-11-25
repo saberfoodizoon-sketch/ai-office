@@ -4,9 +4,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 import { z } from "zod";
-import type { Office } from "../engine/office";
-import { WIDGET_CSS, WIDGET_JS } from "./generated/widget";
-import type { OfficeSnapshot, TaskView } from "../shared/types";
+import type { Office } from "../engine/office.js";
+import { WIDGET_CSS, WIDGET_JS } from "./generated/widget.js";
+import type { OfficeSnapshot, TaskView } from "../shared/types.js";
 
 export const WIDGET_URI = "ui://ai-office/office-v1.html";
 
