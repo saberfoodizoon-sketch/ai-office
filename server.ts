@@ -2,6 +2,8 @@
 // Vercel detects this file (it must import express) and runs it on Fluid compute;
 // server/index.ts runs the same app locally.
 import express from "express";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { MockBrain } from "./engine/brain.js";
 import { Office } from "./engine/office.js";
@@ -55,5 +57,23 @@ app.post("/mcp", async (req, res) => {
   }
 });
 app.all("/mcp", (_req, res) => res.status(405).set("Allow", "POST").json({ error: "Use POST for MCP." }));
+
+// ---- web app (public/) --------------------------------------------------------
+// Served by Express in every environment; on Vercel the folder is bundled with the
+// function (vercel.json includeFiles) and hashed assets are cached by the CDN.
+const PUBLIC_DIR = [fileURLToPath(new URL("./public", import.meta.url)), `${process.cwd()}/public`].find((d) =>
+  existsSync(d),
+);
+if (PUBLIC_DIR) {
+  app.use(
+    express.static(PUBLIC_DIR, {
+      setHeaders: (res, path) => {
+        if (path.includes("/assets/")) res.setHeader("Cache-Control", "public, max-age=31536000, s-maxage=31536000, immutable");
+        else res.setHeader("Cache-Control", "public, max-age=0, s-maxage=60, must-revalidate");
+      },
+    }),
+  );
+  app.get(/^(?!\/(api|mcp|dev-host)(\/|$)).*/, (_req, res) => res.sendFile("index.html", { root: PUBLIC_DIR }));
+}
 
 export default app;

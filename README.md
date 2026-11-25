@@ -10,7 +10,7 @@
 | البيانات | REST على `/api/*` | أدوات MCP على `/mcp` |
 | مين بيطلب الشغل | إنت من اللوحة | إنت من اللوحة، أو ChatGPT نفسه بالأدوات |
 
-## التشغيل
+## التشغيل المحلي
 
 محتاج Node.js 20 أو أحدث.
 
@@ -31,21 +31,43 @@ npm start
 |---|---|---|
 | `PORT` | `8787` | بورت السيرفر |
 | `WORK_SPEED` | `1` | مُضاعِف مدة الشغل (`0.5` أسرع، `2` أبطأ) |
-| `DATA_FILE` | `data/office.json` | مكان حفظ الفريق والمهام |
+| `DATA_FILE` | `data/office.json` | مكان حفظ الفريق والمهام محليًا |
+| `BLOB_READ_WRITE_TOKEN` | — | لو موجود، الحفظ بيبقى في Vercel Blob بدل الملف (Vercel بيحطه لوحده) |
 | `PUBLIC_ORIGIN` | — | دومين الـ widget عند النشر، مثلًا `https://office.example.com` |
+
+## النسخة الأونلاين
+
+- الموقع: https://ai-office-saberfoodizoon-5406.vercel.app
+- سيرفر MCP: `https://ai-office-saberfoodizoon-5406.vercel.app/mcp`
+
+المشروع منشور على Vercel ومربوط بالـ repo، فأي push على `main` بينشر نسخة جديدة لوحده. الفريق والمهام محفوظين في Vercel Blob (store اسمه `ai-office-state`)، فكل اللي بيفتح المكتب (من الموقع أو ChatGPT أو Codex) بيشوف نفس الفريق ونفس المهام.
 
 ## ربطه بـ ChatGPT
 
-1. انشر السيرفر على رابط HTTPS عام. للتجربة السريعة ينفع نفق مؤقت:
-   ```bash
-   npx cloudflared tunnel --url http://localhost:8787
-   ```
-2. افتح https://chatgpt.com/plugins، اضغط **+** ثم **Add custom MCP server**.
-3. اكتب الاسم والوصف، وحط الرابط وفي آخره `/mcp`.
-4. اختار **Create as a plugin** وراجع الأدوات.
-5. في محادثة جديدة جرّب: «افتحلي المكتب»، أو «عيّن مصمم جرافيك»، أو «خلّي الفريق يعمل حملة لكافيه جديد».
+1. افتح https://chatgpt.com/plugins، اضغط **+** ثم **Add custom MCP server**.
+2. اكتب الاسم (مثلًا «مكتبي الذكي») والوصف، وحط الرابط:
+   `https://ai-office-saberfoodizoon-5406.vercel.app/mcp`
+3. خلي الـ authentication على **No authentication**، ووافق على التنبيه، واختار **Create as a plugin**.
+4. في محادثة جديدة جرّب: «افتحلي المكتب»، أو «عيّن مصمم جرافيك»، أو «خلّي الفريق يعمل حملة لكافيه جديد».
 
-بعد أي تعديل في الأدوات أو الـ widget: ابني المشروع من جديد، وأعد تشغيل السيرفر، واضغط **Refresh** في صفحة الـ plugin. لو غيّرت الـ widget تغيير كبير، غيّر `WIDGET_URI` في `server/mcp.ts` (مثلًا `office-v2.html`)، لأن ChatGPT بيعمل cache بالرابط ده.
+بعد أي تعديل في الأدوات أو الـ widget: اعمل push، واستنى النشر يخلص، واضغط **Refresh** في صفحة الـ plugin. لو غيّرت الـ widget تغيير كبير، غيّر `WIDGET_URI` في `server/mcp.ts` (مثلًا `office-v2.html`)، لأن ChatGPT بيعمل cache بالرابط ده.
+
+## ربطه بـ Codex
+
+Codex (الـ CLI والـ IDE extension والتطبيق) بيستخدم نفس الإعدادات. شغّل الأمر ده مرة واحدة:
+
+```bash
+codex mcp add ai-office --url https://ai-office-saberfoodizoon-5406.vercel.app/mcp
+```
+
+أو ضيف السطور دي في `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.ai-office]
+url = "https://ai-office-saberfoodizoon-5406.vercel.app/mcp"
+```
+
+بعدها اطلب من Codex: «شوف مين في فريق ai-office»، أو «ابعت للمدير مهمة: خطة إطلاق لتطبيقي»، أو «هات تسليمات آخر مهمة». Codex هيشتغل بالأدوات، والمكتب الـ 3D بيظهر في ChatGPT والموقع.
 
 ### الأدوات
 
@@ -77,8 +99,9 @@ const office = new Office(new MockBrain(), ...);   // ← حط الـ brain ال
 
 ```
 shared/     الأنواع، الأدوار، وخريطة المكتب (مشتركة بين السيرفر والواجهة)
-engine/     Office (الحالة والجدولة) + Brain (التخطيط والتسليمات)
-server/     Express: REST للموقع + MCP لـ ChatGPT + تقديم الملفات
+engine/     Office (الحالة والجدولة) + Brain (التخطيط والتسليمات) + Store (ملف أو Blob)
+server.ts   تطبيق Express (REST + MCP) — نقطة التشغيل على Vercel
+server/     أدوات MCP، والتشغيل المحلي، والـ widget المدمج
 web/src/    React + three.js: المشهد الـ 3D، والشخصيات، واللوحة
 dev/        host محلي بيحاكي ChatGPT عشان تجرّب الـ widget
 ```
