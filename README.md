@@ -42,7 +42,9 @@ npm start
 - الموقع: https://ai-office-eight-iota.vercel.app
 - سيرفر MCP: `https://ai-office-eight-iota.vercel.app/mcp`
 
-المشروع منشور على Vercel ومربوط بالـ repo، فأي push على `main` بينشر نسخة جديدة لوحده. الفريق والمهام محفوظين في Vercel Blob (store اسمه `ai-office-state`)، فكل اللي بيفتح المكتب (من الموقع أو ChatGPT أو Codex) بيشوف نفس الفريق ونفس المهام.
+المشروع منشور على Vercel ومربوط بالـ repo، فأي push على `main` بينشر نسخة جديدة لوحده.
+
+الفريق والمهام محفوظين في **Upstash Redis** (من Vercel Marketplace)، فكل اللي بيفتح المكتب (من الموقع أو ChatGPT أو Codex) بيشوف نفس الفريق ونفس المهام. لو Redis مش متوصّل، المشروع بيستخدم Vercel Blob. ولو التخزين وقع، المكتب بيكمّل من الذاكرة مؤقتًا بدل ما يقف.
 
 ## ربطه بـ ChatGPT
 

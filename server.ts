@@ -9,7 +9,7 @@ import { waitUntil } from "@vercel/functions";
 import { AiBrain } from "./engine/ai-brain.js";
 import { MockBrain } from "./engine/brain.js";
 import { Office } from "./engine/office.js";
-import { defaultStore } from "./engine/store.js";
+import { defaultStore, storeName } from "./engine/store.js";
 import { createMcpServer } from "./server/mcp.js";
 
 const SPEED = Number(process.env.WORK_SPEED ?? 1);
@@ -27,9 +27,12 @@ const BRAIN = (process.env.BRAIN ?? "agent").toLowerCase();
 const brain = BRAIN === "gateway" && AiBrain.available() ? new AiBrain() : new MockBrain();
 console.log(`brain: ${BRAIN === "agent" ? "connected AI agent (MCP)" : brain.ai ? "AI Gateway" : "templates"}`);
 
+const store = defaultStore(process.env.DATA_FILE ?? "data/office.json");
+console.log(`store: ${storeName(store)}`);
+
 export const office = new Office(
   brain,
-  defaultStore(process.env.DATA_FILE ?? "data/office.json"),
+  store,
   SPEED,
   (p) => waitUntil(p),
   BRAIN === "agent",

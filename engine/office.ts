@@ -61,12 +61,17 @@ function seedData(now: number): OfficeData {
   };
 }
 
-/** How long an instance trusts its in-memory copy before re-reading the store. */
-const CACHE_MS = 4_000;
+/**
+ * How long an instance trusts its in-memory copy before checking the store.
+ * With a versioned store (Redis) that check is one tiny read; the full state is
+ * only re-read when another instance changed it.
+ */
+const CACHE_MS = 3_000;
 
 export class Office {
   private data!: OfficeData;
   private loadedAt = 0;
+  private loadedVersion: string | null = null;
   private mock = new MockBrain();
 
   constructor(
@@ -90,12 +95,24 @@ export class Office {
 
   private async ready(force = false) {
     if (!force && this.data && Date.now() - this.loadedAt < CACHE_MS) return;
+    const version = this.store.version ? await this.store.version() : null;
+    if (this.data && version !== null && version === this.loadedVersion) {
+      this.loadedAt = Date.now();
+      return;
+    }
     const loaded = await this.store.load();
     if (loaded) this.data = loaded;
     else {
       this.data = seedData(Date.now());
       await this.store.save(this.data);
     }
+    this.loadedVersion = this.store.version ? await this.store.version() : null;
+    this.loadedAt = Date.now();
+  }
+
+  private async persist() {
+    await this.store.save(this.data);
+    this.loadedVersion = this.store.version ? await this.store.version() : null;
     this.loadedAt = Date.now();
   }
 
@@ -106,8 +123,7 @@ export class Office {
     const run = this.queue.then(async () => {
       await this.ready(true);
       const out = fn();
-      await this.store.save(this.data);
-      this.loadedAt = Date.now();
+      await this.persist();
       return out;
     });
     this.queue = run.catch(() => undefined);
@@ -116,8 +132,7 @@ export class Office {
 
   async reset() {
     this.data = seedData(Date.now());
-    await this.store.save(this.data);
-    this.loadedAt = Date.now();
+    await this.persist();
   }
 
   hire(input: HireInput) {

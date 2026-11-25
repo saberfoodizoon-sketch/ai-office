@@ -22,6 +22,7 @@ export function App({ client, embedded = false }: { client: OfficeClient; embedd
   const [newTask, setNewTask] = useState(false);
   const [, force] = useState(0);
   const doneSeen = useRef<Set<string> | null>(null);
+  const latest = useRef<OfficeSnapshot | null>(null);
 
   const notify = useCallback((msg: string, kind: "ok" | "err" = "ok") => {
     const id = Date.now() + Math.random();
@@ -38,6 +39,7 @@ export function App({ client, embedded = false }: { client: OfficeClient; embedd
         const s = await client.getOffice();
         if (!alive) return;
         setSnap(s);
+        latest.current = s;
         setError(null);
         // Announce newly finished tasks (but not ones already done on first load).
         const done = s.tasks.filter((t) => t.status === "done").map((t) => t.id);
@@ -49,12 +51,24 @@ export function App({ client, embedded = false }: { client: OfficeClient; embedd
       } catch (e) {
         if (alive) setError((e as Error).message);
       }
-      if (alive) timer = setTimeout(tick, 1000);
+      // Fast while work is happening, slower when idle, slowest in a background tab.
+      const busy = latest.current?.tasks.some((t) => t.status !== "done" && t.status !== "waiting");
+      const delay = document.hidden ? 15_000 : busy ? 1_000 : 4_000;
+      if (alive) timer = setTimeout(tick, delay);
     };
     tick();
+    // Refresh right away when the tab comes back.
+    const onVisible = () => {
+      if (!document.hidden) {
+        clearTimeout(timer);
+        tick();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       alive = false;
       clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [client, notify]);
 
