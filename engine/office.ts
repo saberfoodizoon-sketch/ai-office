@@ -4,8 +4,6 @@
 // without the server running timers.
 
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
 import { ROLES } from "../shared/roles";
 import { DESK_COUNT } from "../shared/layout";
 import type {
@@ -22,6 +20,7 @@ import type {
   TaskView,
 } from "../shared/types";
 import type { Brain } from "./brain";
+import type { Store } from "./store";
 
 const PLANNING_MS = 12_000;
 const REVIEW_MS = 4_000;
@@ -59,45 +58,71 @@ function seedData(now: number): OfficeData {
   };
 }
 
+/** How long an instance trusts its in-memory copy before re-reading the store. */
+const CACHE_MS = 4_000;
+
 export class Office {
-  private data: OfficeData;
+  private data!: OfficeData;
+  private loadedAt = 0;
 
   constructor(
     private brain: Brain,
-    private file?: string,
+    private store: Store,
     /** Multiplier for work durations; 1 = demo speed (~10–20 s per subtask). */
     private speed = 1,
-  ) {
-    this.data = this.load();
-  }
+  ) {}
 
   // ---- persistence ----------------------------------------------------------
+  // Status is derived from timestamps, so the stored data only changes on
+  // writes. Reads use a short-lived cache; writes always re-read first so
+  // concurrent instances don't overwrite each other's recent changes.
 
-  private load(): OfficeData {
-    if (this.file && existsSync(this.file)) {
-      try {
-        return JSON.parse(readFileSync(this.file, "utf8")) as OfficeData;
-      } catch {
-        /* fall through to a fresh office */
-      }
+  private async ready(force = false) {
+    if (!force && this.data && Date.now() - this.loadedAt < CACHE_MS) return;
+    const loaded = await this.store.load();
+    if (loaded) this.data = loaded;
+    else {
+      this.data = seedData(Date.now());
+      await this.store.save(this.data);
     }
-    return seedData(Date.now());
+    this.loadedAt = Date.now();
   }
 
-  private save() {
-    if (!this.file) return;
-    mkdirSync(dirname(this.file), { recursive: true });
-    writeFileSync(this.file, JSON.stringify(this.data, null, 2));
+  private async write<T>(fn: () => T): Promise<T> {
+    await this.ready(true);
+    const out = fn();
+    await this.store.save(this.data);
+    this.loadedAt = Date.now();
+    return out;
   }
 
-  reset() {
+  async reset() {
     this.data = seedData(Date.now());
-    this.save();
+    await this.store.save(this.data);
+    this.loadedAt = Date.now();
+  }
+
+  hire(input: HireInput) {
+    return this.write(() => this.hireSync(input));
+  }
+  fire(employeeId: string) {
+    return this.write(() => this.fireSync(employeeId));
+  }
+  assign(request: string) {
+    return this.write(() => this.assignSync(request));
+  }
+  async getTask(id: string) {
+    await this.ready();
+    return this.getTaskSync(id);
+  }
+  async snapshot() {
+    await this.ready();
+    return this.snapshotSync();
   }
 
   // ---- commands -------------------------------------------------------------
 
-  hire(input: HireInput): HireResult {
+  private hireSync(input: HireInput): HireResult {
     const jobTitle = input.jobTitle.trim().slice(0, 80);
     const jobDescription = input.jobDescription.trim().slice(0, 2000);
     if (!jobTitle) throw new Error("لازم تكتب المسمى الوظيفي.");
@@ -127,11 +152,10 @@ export class Office {
     this.data.employees.push(employee);
     const note = this.brain.hiringNote(employee);
     this.data.lastHire = { employeeId: employee.id, at: employee.hiredAt, note };
-    this.save();
     return { employee: this.viewEmployee(employee, this.snapshotContext(Date.now())), note };
   }
 
-  fire(employeeId: string): string {
+  private fireSync(employeeId: string): string {
     const e = this.data.employees.find((x) => x.id === employeeId);
     if (!e) throw new Error("الموظف ده مش موجود.");
     if (e.roleId === "general_manager" || e.roleId === "hr_manager") throw new Error("مينفعش تستغنى عن المدير العام أو مديرة الموارد البشرية.");
@@ -139,11 +163,10 @@ export class Office {
     const busy = this.data.tasks.some((t) => t.subtasks.some((s) => s.assigneeId === e.id && s.startAt + s.durationMs > now));
     if (busy) throw new Error(`${e.name} شغال على مهمة دلوقتي. استنى لما يخلص.`);
     this.data.employees = this.data.employees.filter((x) => x.id !== employeeId);
-    this.save();
     return `تم الاستغناء عن ${e.name}.`;
   }
 
-  assign(request: string): TaskView {
+  private assignSync(request: string): TaskView {
     const text = request.trim().slice(0, 1000);
     if (!text) throw new Error("اكتب الطلب الأول.");
     const team = this.data.employees;
@@ -178,18 +201,17 @@ export class Office {
     const task: Task = { id: randomUUID(), request: text, createdAt: now, planningMs, subtasks, summary };
     this.data.tasks.unshift(task);
     this.data.tasks = this.data.tasks.slice(0, 30);
-    this.save();
     return this.viewTask(task, now);
   }
 
   // ---- views ----------------------------------------------------------------
 
-  getTask(id: string): TaskView | undefined {
+  private getTaskSync(id: string): TaskView | undefined {
     const t = this.data.tasks.find((x) => x.id === id);
     return t && this.viewTask(t, Date.now());
   }
 
-  snapshot(): OfficeSnapshot {
+  private snapshotSync(): OfficeSnapshot {
     const now = Date.now();
     const ctx = this.snapshotContext(now);
     return {

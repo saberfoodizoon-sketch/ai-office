@@ -1,3 +1,7 @@
 node_modules
 dist
+public
+server/generated
 data/*.json
+.vercel
+.env*

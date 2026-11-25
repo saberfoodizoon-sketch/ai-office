@@ -3,28 +3,21 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
-import { existsSync, readFileSync } from "node:fs";
 import { z } from "zod";
 import type { Office } from "../engine/office";
+import { WIDGET_CSS, WIDGET_JS } from "./generated/widget";
 import type { OfficeSnapshot, TaskView } from "../shared/types";
 
 export const WIDGET_URI = "ui://ai-office/office-v1.html";
 
-function widgetHtml(dir: string): string {
-  const js = join(dir, "widget.js");
-  const css = join(dir, "widget.css");
-  if (!existsSync(js)) return `<!doctype html><p style="font-family:sans-serif">Widget not built. Run <code>npm run build</code>.</p>`;
-  const script = readFileSync(js, "utf8").replace(/<\/script/gi, "<\\/script");
-  const style = existsSync(css) ? readFileSync(css, "utf8") : "";
+function widgetHtml(): string {
+  const script = WIDGET_JS.replace(/<\/script/gi, "<\\/script");
   return `<!doctype html>
 <html lang="ar" dir="rtl">
 <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
-<style>${style}</style></head>
+<style>${WIDGET_CSS}</style></head>
 <body><div id="root"></div><script type="module">${script}</script></body>
 </html>`;
-}
-function join(a: string, b: string) {
-  return a.replace(/\/$/, "") + "/" + b;
 }
 
 function teamText(s: OfficeSnapshot): string {
@@ -78,7 +71,7 @@ function slimSnapshot(s: OfficeSnapshot) {
   };
 }
 
-export function createMcpServer(office: Office, widgetDir: string, publicOrigin?: string): McpServer {
+export function createMcpServer(office: Office, publicOrigin?: string): McpServer {
   const server = new McpServer(
     { name: "ai-office", version: "0.1.0" },
     {
@@ -96,7 +89,7 @@ export function createMcpServer(office: Office, widgetDir: string, publicOrigin?
       {
         uri: WIDGET_URI,
         mimeType: RESOURCE_MIME_TYPE,
-        text: widgetHtml(widgetDir),
+        text: widgetHtml(),
         _meta: {
           ui: {
             prefersBorder: true,
@@ -129,7 +122,7 @@ export function createMcpServer(office: Office, widgetDir: string, publicOrigin?
       },
     },
     async () => {
-      const s = office.snapshot();
+      const s = await office.snapshot();
       return {
         structuredContent: slimSnapshot(s),
         content: [{ type: "text", text: `Showing the office with ${s.employees.length} employees.\n${teamText(s)}` }],
@@ -149,7 +142,7 @@ export function createMcpServer(office: Office, widgetDir: string, publicOrigin?
       _meta: { ui: { resourceUri: WIDGET_URI, visibility: ["app"] } },
     },
     async () => {
-      const s = office.snapshot();
+      const s = await office.snapshot();
       return { structuredContent: s as unknown as Record<string, unknown>, content: [{ type: "text", text: "ok" }] };
     },
   );
@@ -165,7 +158,7 @@ export function createMcpServer(office: Office, widgetDir: string, publicOrigin?
       annotations: { readOnlyHint: true, openWorldHint: false, destructiveHint: false },
     },
     async () => {
-      const s = office.snapshot();
+      const s = await office.snapshot();
       return {
         structuredContent: slimSnapshot(s),
         content: [{ type: "text", text: `Team:\n${teamText(s)}\n\nTasks:\n${s.tasks.slice(0, 5).map(taskText).join("\n\n") || "none"}` }],
@@ -190,7 +183,7 @@ export function createMcpServer(office: Office, widgetDir: string, publicOrigin?
       _meta: { "openai/toolInvocation/invoking": "Layla is hiring…", "openai/toolInvocation/invoked": "Hired." },
     },
     async (args) => {
-      const r = office.hire(args);
+      const r = await office.hire(args);
       const { id, name, roleId, roleTitle, title, activity, doing, completed } = r.employee;
       return {
         structuredContent: { employee: { id, name, roleId, roleTitle, title, activity, doing, completed }, note: r.note },
@@ -213,7 +206,7 @@ export function createMcpServer(office: Office, widgetDir: string, publicOrigin?
       _meta: { "openai/toolInvocation/invoking": "Omar is planning…", "openai/toolInvocation/invoked": "Task assigned." },
     },
     async ({ request }) => {
-      const t = office.assign(request);
+      const t = await office.assign(request);
       return { structuredContent: { task: t }, content: [{ type: "text", text: taskText(t) }] };
     },
   );
@@ -228,7 +221,7 @@ export function createMcpServer(office: Office, widgetDir: string, publicOrigin?
       annotations: { readOnlyHint: true, openWorldHint: false, destructiveHint: false },
     },
     async ({ taskId }) => {
-      const t = office.getTask(taskId);
+      const t = await office.getTask(taskId);
       if (!t) return { isError: true, content: [{ type: "text", text: `No task with id ${taskId}.` }] };
       const delivered = t.subtasks
         .filter((s) => s.deliverable)
@@ -251,7 +244,7 @@ export function createMcpServer(office: Office, widgetDir: string, publicOrigin?
       annotations: { readOnlyHint: false, openWorldHint: false, destructiveHint: true },
     },
     async ({ employeeId }) => {
-      const message = office.fire(employeeId);
+      const message = await office.fire(employeeId);
       return { structuredContent: { message }, content: [{ type: "text", text: message }] };
     },
   );
