@@ -15,14 +15,17 @@ import type {
   OfficeData,
   OfficeSnapshot,
   RoleId,
+  Subtask,
   SubtaskView,
   Task,
   TaskView,
 } from "../shared/types.js";
-import type { Brain } from "./brain.js";
+import { MockBrain, type Brain, type Plan } from "./brain.js";
 import type { Store } from "./store.js";
 
-const PLANNING_MS = 12_000;
+/** Minimum meeting time, and how long the team sits together once the plan is known. */
+const MIN_MEETING_MS = 12_000;
+const GATHER_MS = 8_000;
 const REVIEW_MS = 4_000;
 const MAX_TEAM = DESK_COUNT + 2;
 
@@ -64,12 +67,15 @@ const CACHE_MS = 4_000;
 export class Office {
   private data!: OfficeData;
   private loadedAt = 0;
+  private mock = new MockBrain();
 
   constructor(
     private brain: Brain,
     private store: Store,
-    /** Multiplier for work durations; 1 = demo speed (~10–20 s per subtask). */
+    /** Multiplier for work durations; 1 = demo speed (~15–25 s per subtask). */
     private speed = 1,
+    /** Keeps background work alive after the response (waitUntil on Vercel). */
+    private defer: (p: Promise<unknown>) => void = () => {},
   ) {}
 
   // ---- persistence ----------------------------------------------------------
@@ -88,12 +94,19 @@ export class Office {
     this.loadedAt = Date.now();
   }
 
-  private async write<T>(fn: () => T): Promise<T> {
-    await this.ready(true);
-    const out = fn();
-    await this.store.save(this.data);
-    this.loadedAt = Date.now();
-    return out;
+  private queue: Promise<unknown> = Promise.resolve();
+
+  /** Read-modify-write, serialized within this instance (background work writes too). */
+  private write<T>(fn: () => T): Promise<T> {
+    const run = this.queue.then(async () => {
+      await this.ready(true);
+      const out = fn();
+      await this.store.save(this.data);
+      this.loadedAt = Date.now();
+      return out;
+    });
+    this.queue = run.catch(() => undefined);
+    return run;
   }
 
   async reset() {
@@ -108,8 +121,14 @@ export class Office {
   fire(employeeId: string) {
     return this.write(() => this.fireSync(employeeId));
   }
-  assign(request: string) {
-    return this.write(() => this.assignSync(request));
+  /**
+   * Creates the task and returns at once; the GM plans and the team works in the
+   * background. `defer` keeps that work alive after the response (waitUntil on Vercel).
+   */
+  async assign(request: string) {
+    const view = await this.write(() => this.createTask(request));
+    this.defer(this.run(view.id).catch((e) => console.error("task failed", view.id, e)));
+    return view;
   }
   async getTask(id: string) {
     await this.ready();
@@ -160,48 +179,128 @@ export class Office {
     if (!e) throw new Error("الموظف ده مش موجود.");
     if (e.roleId === "general_manager" || e.roleId === "hr_manager") throw new Error("مينفعش تستغنى عن المدير العام أو مديرة الموارد البشرية.");
     const now = Date.now();
-    const busy = this.data.tasks.some((t) => t.subtasks.some((s) => s.assigneeId === e.id && s.startAt + s.durationMs > now));
+    const busy = this.data.tasks.some((t) =>
+      t.subtasks.some((s) => s.assigneeId === e.id && subtaskState(s, now).status !== "done" && now - t.createdAt < STALE_MS),
+    );
     if (busy) throw new Error(`${e.name} شغال على مهمة دلوقتي. استنى لما يخلص.`);
     this.data.employees = this.data.employees.filter((x) => x.id !== employeeId);
     return `تم الاستغناء عن ${e.name}.`;
   }
 
-  private assignSync(request: string): TaskView {
+  private createTask(request: string): TaskView {
     const text = request.trim().slice(0, 1000);
     if (!text) throw new Error("اكتب الطلب الأول.");
-    const team = this.data.employees;
-    const plan = this.brain.plan(text, team);
-    if (!plan.length) throw new Error("مفيش موظفين يشتغلوا على الطلب. عيّن موظفين من الموارد البشرية الأول.");
-
-    const now = Date.now();
-    const planningMs = PLANNING_MS;
-    // Each employee works on one subtask at a time: queue after their current work.
-    const busyUntil = new Map<string, number>();
-    for (const t of this.data.tasks)
-      for (const s of t.subtasks) busyUntil.set(s.assigneeId, Math.max(busyUntil.get(s.assigneeId) ?? 0, s.startAt + s.durationMs));
-
-    const subtasks = plan.map((p, i) => {
-      const emp = team.find((e) => e.id === p.assigneeId)!;
-      const startAt = Math.max(now + planningMs + i * 1_200, (busyUntil.get(emp.id) ?? 0) + 1_000);
-      const durationMs = Math.round((10_000 + (hash(text + emp.id) % 10_000)) * this.speed);
-      return {
-        id: randomUUID(),
-        assigneeId: emp.id,
-        title: p.title,
-        startAt,
-        durationMs,
-        deliverable: this.brain.deliverable(emp, p.title, text),
-      };
-    });
-
-    const summary = this.brain.summary(
-      text,
-      subtasks.map((s) => ({ employee: team.find((e) => e.id === s.assigneeId)!, title: s.title })),
-    );
-    const task: Task = { id: randomUUID(), request: text, createdAt: now, planningMs, subtasks, summary };
+    if (!this.data.employees.some((e) => e.roleId !== "general_manager" && e.roleId !== "hr_manager"))
+      throw new Error("مفيش موظفين يشتغلوا على الطلب. عيّن موظفين من الموارد البشرية الأول.");
+    const task: Task = {
+      id: randomUUID(),
+      request: text,
+      createdAt: Date.now(),
+      planningMs: MIN_MEETING_MS,
+      planned: false,
+      subtasks: [],
+      ai: this.brain.ai,
+    };
     this.data.tasks.unshift(task);
     this.data.tasks = this.data.tasks.slice(0, 30);
-    return this.viewTask(task, now);
+    return this.viewTask(task, task.createdAt);
+  }
+
+  private task(id: string) {
+    const t = this.data.tasks.find((x) => x.id === id);
+    if (!t) throw new Error("task gone");
+    return t;
+  }
+
+  /** Try the configured brain, fall back to templates so a task always finishes. */
+  private async think<T>(taskId: string, step: string, ai: () => Promise<T>, mock: () => Promise<T>): Promise<T> {
+    if (this.brain.ai) {
+      try {
+        return await ai();
+      } catch (e) {
+        console.error(`brain.${step} failed, using templates`, e);
+        await this.write(() => {
+          const t = this.task(taskId);
+          t.ai = false;
+          t.error = "الذكاء الاصطناعي مكانش متاح لجزء من المهمة، فاتكمّل بالقوالب.";
+        });
+      }
+    }
+    return mock();
+  }
+
+  private async run(taskId: string) {
+    const { request } = this.task(taskId);
+    const team = [...this.data.employees];
+    const byId = new Map(team.map((e) => [e.id, e]));
+
+    // 1) The GM reads the request and splits it.
+    let plan: Plan = await this.think(
+      taskId,
+      "plan",
+      () => this.brain.plan(request, team),
+      () => this.mock.plan(request, team),
+    );
+    if (!plan.subtasks.length) plan = await this.mock.plan(request, team);
+
+    const subtasks = await this.write(() => {
+      const t = this.task(taskId);
+      const now = Date.now();
+      t.understanding = plan.understanding;
+      // The team gathers in the meeting room for a moment once roles are known.
+      t.planningMs = Math.max(MIN_MEETING_MS, now - t.createdAt + GATHER_MS);
+      const meetingEnds = t.createdAt + t.planningMs;
+      // One subtask at a time per person: queue after their current work.
+      const busyUntil = new Map<string, number>();
+      for (const other of this.data.tasks)
+        for (const s of other.subtasks)
+          busyUntil.set(s.assigneeId, Math.max(busyUntil.get(s.assigneeId) ?? 0, s.doneAt ?? s.startAt + s.durationMs));
+      t.subtasks = plan.subtasks
+        .filter((p) => byId.has(p.assigneeId))
+        .map((p, i) => {
+          const startAt = Math.max(meetingEnds + i * 1_200, (busyUntil.get(p.assigneeId) ?? 0) + 1_000);
+          const durationMs = Math.round((14_000 + (hash(request + p.assigneeId) % 10_000)) * this.speed);
+          busyUntil.set(p.assigneeId, startAt + durationMs);
+          return { id: randomUUID(), assigneeId: p.assigneeId, title: p.title, brief: p.brief, startAt, durationMs };
+        });
+      t.planned = true;
+      return t.subtasks.map((s) => ({ ...s }));
+    });
+
+    // 2) Everyone works in parallel. The result shows once its slot elapses,
+    //    so the office animation stays believable however fast the model is.
+    const results = await Promise.all(
+      subtasks.map(async (s) => {
+        const emp = byId.get(s.assigneeId)!;
+        const brief = { assigneeId: s.assigneeId, title: s.title, brief: s.brief };
+        const deliverable = await this.think(
+          taskId,
+          "deliverable",
+          () => this.brain.deliverable(emp, brief, request, plan.understanding),
+          () => this.mock.deliverable(emp, brief, request, plan.understanding),
+        );
+        await this.write(() => {
+          const sub = this.task(taskId).subtasks.find((x) => x.id === s.id);
+          if (!sub) return;
+          sub.deliverable = deliverable;
+          sub.doneAt = Math.max(Date.now(), sub.startAt + sub.durationMs);
+        });
+        return { employee: emp, title: s.title, deliverable };
+      }),
+    );
+
+    // 3) The GM reviews and reports.
+    const summary = await this.think(
+      taskId,
+      "summary",
+      () => this.brain.summary(request, plan.understanding, results),
+      () => this.mock.summary(request, plan.understanding, results),
+    );
+    await this.write(() => {
+      const t = this.task(taskId);
+      t.summary = summary;
+      t.summaryAt = Date.now();
+    });
   }
 
   // ---- views ----------------------------------------------------------------
@@ -223,7 +322,7 @@ export class Office {
   }
 
   private snapshotContext(now: number) {
-    const planning = this.data.tasks.filter((t) => now < t.createdAt + t.planningMs);
+    const planning = this.data.tasks.filter((t) => this.taskStatus(t, now) === "planning");
     const inMeeting = new Set<string>();
     for (const t of planning) for (const s of t.subtasks) inMeeting.add(s.assigneeId);
     const anyActive = this.data.tasks.some((t) => this.taskStatus(t, now) !== "done");
@@ -241,11 +340,12 @@ export class Office {
     for (const t of this.data.tasks)
       for (const s of t.subtasks) {
         if (s.assigneeId !== e.id) continue;
-        if (now >= s.startAt + s.durationMs) completed++;
-        else if (now >= s.startAt) {
+        const st = subtaskState(s, now);
+        if (st.status === "done") completed++;
+        else if (st.status === "working") {
           activity = "working";
           doing = s.title;
-          doingProgress = (now - s.startAt) / s.durationMs;
+          doingProgress = st.progress;
         }
       }
 
@@ -287,39 +387,67 @@ export class Office {
   }
 
   private taskStatus(t: Task, now: number): TaskView["status"] {
-    if (now < t.createdAt + t.planningMs) return "planning";
-    const end = Math.max(...t.subtasks.map((s) => s.startAt + s.durationMs));
-    if (now < end) return "in_progress";
-    if (now < end + REVIEW_MS) return "reviewing";
+    if (!t.planned || now < t.createdAt + t.planningMs) {
+      // A plan that never arrives (crashed instance) shouldn't freeze the office.
+      if (!t.planned && now - t.createdAt > STALE_MS) return "done";
+      return "planning";
+    }
+    const states = t.subtasks.map((s) => subtaskState(s, now));
+    if (states.some((x) => x.status !== "done")) {
+      if (now - t.createdAt > STALE_MS) return "done";
+      return "in_progress";
+    }
+    const lastDone = Math.max(...t.subtasks.map((s) => s.doneAt ?? 0));
+    if (!t.summary || now < Math.max(lastDone + REVIEW_MS, t.summaryAt ?? 0)) return now - t.createdAt > STALE_MS ? "done" : "reviewing";
     return "done";
   }
 
   private viewTask(t: Task, now: number): TaskView {
     const names = new Map(this.data.employees.map((e) => [e.id, e.name]));
     const subtasks: SubtaskView[] = t.subtasks.map((s) => {
-      const p = Math.min(1, Math.max(0, (now - s.startAt) / s.durationMs));
-      const status = p >= 1 ? "done" : now >= s.startAt ? "working" : "queued";
+      const st = subtaskState(s, now);
       return {
         id: s.id,
         assigneeId: s.assigneeId,
         assigneeName: names.get(s.assigneeId) ?? "موظف سابق",
         title: s.title,
-        status,
-        progress: p,
-        deliverable: status === "done" ? s.deliverable : undefined,
+        brief: s.brief,
+        status: st.status,
+        progress: st.progress,
+        deliverable: st.status === "done" ? s.deliverable : undefined,
       };
     });
     const status = this.taskStatus(t, now);
-    const work = subtasks.reduce((a, s) => a + s.progress, 0) / subtasks.length;
-    const progress = status === "planning" ? 0.05 * ((now - t.createdAt) / t.planningMs) : status === "done" ? 1 : 0.05 + work * 0.9;
+    const work = subtasks.length ? subtasks.reduce((a, s) => a + s.progress, 0) / subtasks.length : 0;
+    const progress =
+      status === "planning"
+        ? Math.min(0.08, 0.08 * ((now - t.createdAt) / t.planningMs))
+        : status === "done"
+          ? 1
+          : status === "reviewing"
+            ? 0.96
+            : 0.08 + work * 0.86;
     return {
       id: t.id,
       request: t.request,
       createdAt: t.createdAt,
       status,
       progress,
+      understanding: t.planned ? t.understanding : undefined,
       subtasks,
       summary: status === "done" ? t.summary : undefined,
+      ai: Boolean(t.ai),
+      error: t.error,
     };
   }
+}
+
+/** Give up on a task that's been stuck this long (e.g. its instance died). */
+const STALE_MS = 6 * 60_000;
+
+function subtaskState(s: Subtask, now: number): { status: SubtaskView["status"]; progress: number } {
+  if (s.deliverable && s.doneAt !== undefined && now >= s.doneAt) return { status: "done", progress: 1 };
+  if (now < s.startAt) return { status: "queued", progress: 0 };
+  // Until the work arrives, creep toward 95%.
+  return { status: "working", progress: Math.min(0.95, (now - s.startAt) / s.durationMs) };
 }

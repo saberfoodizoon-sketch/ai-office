@@ -5,6 +5,8 @@ import express from "express";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { waitUntil } from "@vercel/functions";
+import { AiBrain } from "./engine/ai-brain.js";
 import { MockBrain } from "./engine/brain.js";
 import { Office } from "./engine/office.js";
 import { defaultStore } from "./engine/store.js";
@@ -16,7 +18,16 @@ const PUBLIC_ORIGIN =
   process.env.PUBLIC_ORIGIN ??
   (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : undefined);
 
-export const office = new Office(new MockBrain(), defaultStore(process.env.DATA_FILE ?? "data/office.json"), SPEED);
+// Real model through AI Gateway when credentials exist (always on Vercel), else templates.
+const brain = AiBrain.available() && process.env.BRAIN !== "mock" ? new AiBrain() : new MockBrain();
+console.log(`brain: ${brain.ai ? "AI Gateway" : "templates"}`);
+
+export const office = new Office(
+  brain,
+  defaultStore(process.env.DATA_FILE ?? "data/office.json"),
+  SPEED,
+  (p) => waitUntil(p),
+);
 
 const app = express();
 app.use(express.json({ limit: "64kb" }));

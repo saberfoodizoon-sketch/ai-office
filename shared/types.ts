@@ -32,19 +32,33 @@ export interface Subtask {
   id: string;
   assigneeId: string;
   title: string;
+  /** The GM's instructions to this employee: what exactly to deliver. */
+  brief: string;
   startAt: number;
+  /** Expected duration, drives the progress bar until the work arrives. */
   durationMs: number;
-  /** Generated up front, only exposed once the subtask is done. */
-  deliverable: string;
+  /** Set when the employee finishes; only exposed once now >= doneAt. */
+  deliverable?: string;
+  doneAt?: number;
 }
 
 export interface Task {
   id: string;
   request: string;
   createdAt: number;
+  /** Meeting length; extended once the plan is known so the team can gather. */
   planningMs: number;
+  /** False while the GM is still reading and splitting the request. */
+  planned: boolean;
+  /** The GM's understanding of the request, in his words. */
+  understanding?: string;
   subtasks: Subtask[];
-  summary: string;
+  summary?: string;
+  /** When the GM finished his final review. */
+  summaryAt?: number;
+  /** True when a real model did the work (false = template fallback). */
+  ai?: boolean;
+  error?: string;
 }
 
 export interface OfficeData {
@@ -82,6 +96,7 @@ export interface SubtaskView {
   assigneeId: string;
   assigneeName: string;
   title: string;
+  brief: string;
   status: SubtaskStatus;
   progress: number;
   deliverable?: string;
@@ -93,8 +108,11 @@ export interface TaskView {
   createdAt: number;
   status: TaskStatus;
   progress: number;
+  understanding?: string;
   subtasks: SubtaskView[];
   summary?: string;
+  ai: boolean;
+  error?: string;
 }
 
 export interface OfficeSnapshot {

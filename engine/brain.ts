@@ -10,14 +10,24 @@ import type { Employee, RoleId } from "../shared/types.js";
 export interface PlannedSubtask {
   assigneeId: string;
   title: string;
+  /** What exactly this person must deliver, in the GM's words. */
+  brief: string;
+}
+
+export interface Plan {
+  /** The GM's restatement of the request: goal, audience, constraints. */
+  understanding: string;
+  subtasks: PlannedSubtask[];
 }
 
 export interface Brain {
+  /** True when backed by a real model (shown in the UI). */
+  readonly ai: boolean;
   classifyRole(jobTitle: string, jobDescription: string): RoleId;
   hiringNote(employee: Employee): string;
-  plan(request: string, team: Employee[]): PlannedSubtask[];
-  deliverable(employee: Employee, subtaskTitle: string, request: string): string;
-  summary(request: string, parts: { employee: Employee; title: string }[]): string;
+  plan(request: string, team: Employee[]): Promise<Plan>;
+  deliverable(employee: Employee, subtask: PlannedSubtask, request: string, understanding: string): Promise<string>;
+  summary(request: string, understanding: string, parts: { employee: Employee; title: string; deliverable: string }[]): Promise<string>;
 }
 
 const MAX_ASSIGNEES = 5;
@@ -252,7 +262,24 @@ ${bullets([...duties(e.jobDescription).slice(0, 3), "تحديد المطلوب �
 ${bullets(["وضوح المتطلبات من البداية", "التنسيق مع باقي الفريق"])}`,
 };
 
+const BRIEFS: Record<RoleId, string> = {
+  general_manager: "متابعة الشغل.",
+  hr_manager: "حدّد الأدوار الناقصة في الفريق واكتب وصفها الوظيفي.",
+  product_manager: "حدّد المشكلة والمستخدم المستهدف ونطاق النسخة الأولى وخارطة طريق.",
+  copywriter: "اكتب الرسالة الأساسية و3 عناوين وبوست جاهز للنشر ودعوة للفعل.",
+  designer: "حدّد الاتجاه البصري والألوان والخطوط والشاشات أو التصميمات المطلوبة.",
+  marketer: "حدّد الجمهور والقنوات وخطة 30 يوم ومؤشرات النجاح.",
+  developer: "اقترح المعمارية وخطوات التنفيذ والتقدير الزمني.",
+  data_analyst: "حدّد مؤشرات القياس والبيانات المطلوبة وشكل التقرير.",
+  researcher: "حدّد أسئلة البحث والمنافسين والمنهجية والفرص المبدئية.",
+  sales: "حدّد العميل المثالي والعرض والرد على الاعتراضات.",
+  support: "اكتب الأسئلة الشائعة وقالب الرد على الشكاوى ومعايير الجودة.",
+  specialist: "حط خطة تنفيذ واضحة من منظور وظيفتك.",
+};
+
 export class MockBrain implements Brain {
+  readonly ai = false;
+
   classifyRole(jobTitle: string, jobDescription: string): RoleId {
     return classifyRole(jobTitle, jobDescription);
   }
@@ -263,7 +290,11 @@ export class MockBrain implements Brain {
     return `تم تعيين ${e.name} في وظيفة «${e.title}» (${ROLES[e.roleId].title}). مكتبه جاهز وهيبدأ يستلم مهام من المدير فورًا.${resp}`;
   }
 
-  plan(request: string, team: Employee[]): PlannedSubtask[] {
+  async plan(request: string, team: Employee[]): Promise<Plan> {
+    return { understanding: `المطلوب: ${topicOf(request)}.`, subtasks: this.planSync(request, team) };
+  }
+
+  private planSync(request: string, team: Employee[]): PlannedSubtask[] {
     const topic = topicOf(request, 40);
     const workers = team.filter((e) => WORKER_ROLES.includes(e.roleId));
     if (!workers.length) return [];
@@ -296,14 +327,15 @@ export class MockBrain implements Brain {
     return picked.slice(0, MAX_ASSIGNEES).map(({ e }) => ({
       assigneeId: e.id,
       title: SUBTASK_TITLES[e.roleId](topic),
+      brief: BRIEFS[e.roleId],
     }));
   }
 
-  deliverable(e: Employee, _title: string, request: string): string {
+  async deliverable(e: Employee, _sub: PlannedSubtask, request: string, _understanding?: string): Promise<string> {
     return TEMPLATES[e.roleId](topicOf(request), e);
   }
 
-  summary(request: string, parts: { employee: Employee; title: string }[]): string {
+  async summary(request: string, _understanding: string, parts: { employee: Employee; title: string }[]): Promise<string> {
     const topic = topicOf(request);
     return `## تقرير المدير: ${topic}
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { OfficeSnapshot } from "../../shared/types";
 import type { OfficeClient } from "./client";
 import { Office3D, type ViewMode } from "./scene/Office3D";
+import { NewTaskDialog } from "./ui/NewTaskDialog";
 import { Panel, type Tab } from "./ui/Panel";
 
 interface Toast {
@@ -18,6 +19,7 @@ export function App({ client, embedded = false }: { client: OfficeClient; embedd
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [panelOpen, setPanelOpen] = useState(true);
+  const [newTask, setNewTask] = useState(false);
   const [, force] = useState(0);
   const doneSeen = useRef<Set<string> | null>(null);
 
@@ -80,6 +82,9 @@ export function App({ client, embedded = false }: { client: OfficeClient; embedd
           </div>
         </div>
         <div className="actions">
+          <button className="primary new-task" onClick={() => setNewTask(true)}>
+            ＋ مهمة جديدة
+          </button>
           <div className="seg" role="group" aria-label="طريقة العرض">
             <button className={mode === "3d" ? "on" : ""} onClick={() => setMode("3d")}>
               3D
@@ -149,6 +154,23 @@ export function App({ client, embedded = false }: { client: OfficeClient; embedd
           selected={selected}
           onSelect={(id) => setSelectedId(id)}
           notify={notify}
+          onNewTask={() => setNewTask(true)}
+        />
+      )}
+
+      {newTask && (
+        <NewTaskDialog
+          client={client}
+          gm={snap.employees.find((e) => e.roleId === "general_manager")}
+          team={snap.employees}
+          onClose={() => setNewTask(false)}
+          onCreated={(msg) => {
+            notify(msg);
+            setSelectedId(null);
+            setTab("gm");
+            setPanelOpen(true);
+          }}
+          onError={(msg) => notify(msg, "err")}
         />
       )}
 

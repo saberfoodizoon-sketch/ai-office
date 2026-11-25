@@ -20,6 +20,8 @@
     "@react-three/drei": "^10.7.9",
     "@react-three/fiber": "^9.8.2",
     "@vercel/blob": "^2.9.0",
+    "@vercel/functions": "^3.11.3",
+    "ai": "^7.0.181",
     "express": "^5.3.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",

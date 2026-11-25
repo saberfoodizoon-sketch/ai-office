@@ -30,6 +30,7 @@ interface Props {
   selected: EmployeeView | null;
   onSelect: (id: string | null) => void;
   notify: (msg: string, kind?: "ok" | "err") => void;
+  onNewTask: () => void;
 }
 
 function Avatar({ e, size = 34 }: { e: EmployeeView; size?: number }) {
@@ -42,7 +43,7 @@ function Avatar({ e, size = 34 }: { e: EmployeeView; size?: number }) {
 
 const ACT: Record<EmployeeView["activity"], string> = { working: "بيشتغل", meeting: "في اجتماع", idle: "متاح", break: "استراحة" };
 
-export function Panel({ snap, client, tab, setTab, selected, onSelect, notify }: Props) {
+export function Panel({ snap, client, tab, setTab, selected, onSelect, notify, onNewTask }: Props) {
   const gm = snap.employees.find((e) => e.roleId === "general_manager");
   const hr = snap.employees.find((e) => e.roleId === "hr_manager");
   const active = snap.tasks.filter((t) => t.status !== "done").length;
@@ -74,11 +75,16 @@ export function Panel({ snap, client, tab, setTab, selected, onSelect, notify }:
           <TeamTab snap={snap} onSelect={onSelect} />
         ) : (
           <div className="stack">
-            {snap.tasks.length === 0 && <p className="empty">مفيش مهام لسه. ابعت طلب للمدير من تبويب «المدير».</p>}
+            <button className="primary block" onClick={onNewTask}>
+              ＋ مهمة جديدة
+            </button>
+            {snap.tasks.length === 0 && (
+              <p className="empty">مفيش مهام لسه. اضغط «مهمة جديدة» واكتب المطلوب، و{gm?.name ?? "المدير"} هيوزّعه على الفريق.</p>
+            )}
             {snap.tasks.map((t) => (
               <div key={t.id}>
                 <p className="req">«{t.request}»</p>
-                <TaskCard task={t} onFocus={(id) => onSelect(id)} />
+                <TaskCard task={t} gmName={gm?.name} onFocus={(id) => onSelect(id)} />
               </div>
             ))}
           </div>
@@ -97,9 +103,9 @@ function GmTab({ snap, client, gm, notify, onFocus }: { snap: OfficeSnapshot; cl
     if (!text.trim() || busy) return;
     setBusy(true);
     try {
-      const t = await client.assign(text);
+      await client.assign(text);
       setText("");
-      notify(`${gm?.name ?? "المدير"} استلم الطلب ووزّعه على ${t.subtasks.length} من الفريق`);
+      notify(`${gm?.name ?? "المدير"} استلم الطلب وبيقرأه دلوقتي`);
     } catch (err) {
       notify((err as Error).message, "err");
     } finally {
@@ -122,7 +128,7 @@ function GmTab({ snap, client, gm, notify, onFocus }: { snap: OfficeSnapshot; cl
         <div className="msg msg--gm">
           {gm && <Avatar e={gm} size={28} />}
           <div>
-            أهلًا، أنا {gm?.name ?? "المدير"} 👋 قولّي محتاج إيه، وأنا هقسّم الشغل على الفريق وأرجعلك بيه خلصان.
+            أهلًا، أنا {gm?.name ?? "المدير"} 👋 اكتبلي المهمة بالتفصيل تحت (الهدف، الجمهور، الأسلوب). هفهمها، وأقسّمها، وأدّي كل جزء للشخص المناسب، وأرجعلك بتقرير.
           </div>
         </div>
         {history.map((t) => (
@@ -132,11 +138,11 @@ function GmTab({ snap, client, gm, notify, onFocus }: { snap: OfficeSnapshot; cl
               {gm && <Avatar e={gm} size={28} />}
               <div className="grow">
                 <p>
-                  {t.status === "planning"
-                    ? "تمام، بجمع الفريق في غرفة الاجتماعات…"
-                    : `وزّعتها على: ${t.subtasks.map((s) => s.assigneeName).join("، ")}`}
+                  {!t.subtasks.length
+                    ? "تمام، بقرأ الطلب وبفكّر مين الأنسب لكل جزء…"
+                    : `وزّعتها على: ${[...new Set(t.subtasks.map((s) => s.assigneeName))].join("، ")}`}
                 </p>
-                <TaskCard task={t} onFocus={onFocus} />
+                <TaskCard task={t} gmName={gm?.name} onFocus={onFocus} />
               </div>
             </div>
           </div>
@@ -156,7 +162,7 @@ function GmTab({ snap, client, gm, notify, onFocus }: { snap: OfficeSnapshot; cl
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder={`اكتب طلبك لـ ${gm?.name ?? "المدير"}…`}
+          placeholder={`مهمة جديدة لـ ${gm?.name ?? "المدير"}… (Enter للإرسال)`}
           rows={2}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {

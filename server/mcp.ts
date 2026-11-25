@@ -25,8 +25,12 @@ function teamText(s: OfficeSnapshot): string {
 }
 
 function taskText(t: TaskView): string {
-  const lines = t.subtasks.map((s) => `- ${s.assigneeName}: ${s.title} [${s.status} ${Math.round(s.progress * 100)}%]`);
-  return `Task ${t.id} — ${t.status} (${Math.round(t.progress * 100)}%)\nRequest: ${t.request}\n${lines.join("\n")}`;
+  const head = `Task ${t.id} — ${t.status} (${Math.round(t.progress * 100)}%)\nRequest: ${t.request}`;
+  if (!t.subtasks.length) return `${head}\nThe GM is still reading the request and splitting it; check again with get_task in ~15 s.`;
+  const lines = t.subtasks.map(
+    (s) => `- ${s.assigneeName}: ${s.title} [${s.status} ${Math.round(s.progress * 100)}%]\n  Brief: ${s.brief}`,
+  );
+  return [head, t.understanding && `GM's understanding: ${t.understanding}`, lines.join("\n")].filter(Boolean).join("\n");
 }
 
 const employeeShape = z.object({
@@ -50,12 +54,16 @@ const taskShape = z.object({
       assigneeId: z.string(),
       assigneeName: z.string(),
       title: z.string(),
+      brief: z.string(),
       status: z.string(),
       progress: z.number(),
       deliverable: z.string().optional(),
     }),
   ),
+  understanding: z.string().optional(),
   summary: z.string().optional(),
+  ai: z.boolean(),
+  error: z.string().optional(),
 });
 
 /** Strip fields the model doesn't need, keeping structuredContent compact. */
@@ -64,8 +72,8 @@ function slimSnapshot(s: OfficeSnapshot) {
     employees: s.employees.map(({ id, name, roleId, roleTitle, title, activity, doing, completed }) => ({
       id, name, roleId, roleTitle, title, activity, doing, completed,
     })),
-    tasks: s.tasks.slice(0, 8).map(({ id, request, status, progress, subtasks, summary }) => ({
-      id, request, status, progress, summary,
+    tasks: s.tasks.slice(0, 8).map(({ id, request, status, progress, subtasks, summary, understanding, ai, error }) => ({
+      id, request, status, progress, summary, understanding, ai, error,
       subtasks: subtasks.map(({ deliverable: _d, ...rest }) => rest),
     })),
   };
@@ -198,8 +206,10 @@ export function createMcpServer(office: Office, publicOrigin?: string): McpServe
       title: "Give the GM a task",
       description:
         "Use this when the user asks the team to do work (write content, plan a launch, design, research…). " +
-        "The General Manager splits the request into subtasks for the right employees. Returns a task id; " +
-        "deliverables appear in get_task once each subtask is done.",
+        "The General Manager reads the request, restates it, splits it into subtasks and gives each one, with a brief, " +
+        "to the employee whose job description fits best. Returns a task id at once; planning takes ~10–20 s and the " +
+        "whole task ~1 min. Poll get_task for the plan, each deliverable and the GM's final report. " +
+        "Pass the user's request with all the details they gave (audience, tone, constraints).",
       inputSchema: { request: z.string().min(1).max(1000).describe("The work request, in the user's words") },
       outputSchema: { task: taskShape },
       annotations: { readOnlyHint: false, openWorldHint: false, destructiveHint: false },
