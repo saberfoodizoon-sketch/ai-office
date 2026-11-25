@@ -222,7 +222,9 @@ export class Office {
         await this.write(() => {
           const t = this.task(taskId);
           t.ai = false;
-          t.error = "الذكاء الاصطناعي مكانش متاح لجزء من المهمة، فاتكمّل بالقوالب.";
+          t.error = /credit card|customer_verification/i.test(String(e))
+            ? "الذكاء الاصطناعي محتاج تفعيل: ضيف كارت في حساب Vercel (AI Gateway) عشان يتفتح الرصيد المجاني. المهمة اتكمّلت بالقوالب."
+            : "الذكاء الاصطناعي مكانش متاح لجزء من المهمة، فاتكمّل بالقوالب.";
         });
       }
     }
