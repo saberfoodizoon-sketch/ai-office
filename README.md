@@ -37,8 +37,8 @@ npm start
 
 ## النسخة الأونلاين
 
-- الموقع: https://ai-office-saberfoodizoon-5406.vercel.app
-- سيرفر MCP: `https://ai-office-saberfoodizoon-5406.vercel.app/mcp`
+- الموقع: https://ai-office-eight-iota.vercel.app
+- سيرفر MCP: `https://ai-office-eight-iota.vercel.app/mcp`
 
 المشروع منشور على Vercel ومربوط بالـ repo، فأي push على `main` بينشر نسخة جديدة لوحده. الفريق والمهام محفوظين في Vercel Blob (store اسمه `ai-office-state`)، فكل اللي بيفتح المكتب (من الموقع أو ChatGPT أو Codex) بيشوف نفس الفريق ونفس المهام.
 
@@ -46,7 +46,7 @@ npm start
 
 1. افتح https://chatgpt.com/plugins، اضغط **+** ثم **Add custom MCP server**.
 2. اكتب الاسم (مثلًا «مكتبي الذكي») والوصف، وحط الرابط:
-   `https://ai-office-saberfoodizoon-5406.vercel.app/mcp`
+   `https://ai-office-eight-iota.vercel.app/mcp`
 3. خلي الـ authentication على **No authentication**، ووافق على التنبيه، واختار **Create as a plugin**.
 4. في محادثة جديدة جرّب: «افتحلي المكتب»، أو «عيّن مصمم جرافيك»، أو «خلّي الفريق يعمل حملة لكافيه جديد».
 
@@ -57,14 +57,14 @@ npm start
 Codex (الـ CLI والـ IDE extension والتطبيق) بيستخدم نفس الإعدادات. شغّل الأمر ده مرة واحدة:
 
 ```bash
-codex mcp add ai-office --url https://ai-office-saberfoodizoon-5406.vercel.app/mcp
+codex mcp add ai-office --url https://ai-office-eight-iota.vercel.app/mcp
 ```
 
 أو ضيف السطور دي في `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.ai-office]
-url = "https://ai-office-saberfoodizoon-5406.vercel.app/mcp"
+url = "https://ai-office-eight-iota.vercel.app/mcp"
 ```
 
 بعدها اطلب من Codex: «شوف مين في فريق ai-office»، أو «ابعت للمدير مهمة: خطة إطلاق لتطبيقي»، أو «هات تسليمات آخر مهمة». Codex هيشتغل بالأدوات، والمكتب الـ 3D بيظهر في ChatGPT والموقع.
