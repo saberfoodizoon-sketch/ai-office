@@ -76,6 +76,11 @@ export class Office {
     private speed = 1,
     /** Keeps background work alive after the response (waitUntil on Vercel). */
     private defer: (p: Promise<unknown>) => void = () => {},
+    /**
+     * Agent mode: tasks wait for an AI assistant connected over MCP to act as
+     * the GM and the team (see agentWork / submitPlan / submitDeliverable / submitReport).
+     */
+    readonly agentMode = false,
   ) {}
 
   // ---- persistence ----------------------------------------------------------
@@ -125,9 +130,99 @@ export class Office {
    * Creates the task and returns at once; the GM plans and the team works in the
    * background. `defer` keeps that work alive after the response (waitUntil on Vercel).
    */
-  async assign(request: string) {
-    const view = await this.write(() => this.createTask(request));
-    this.defer(this.run(view.id).catch((e) => console.error("task failed", view.id, e)));
+  async assign(request: string, mode: "agent" | "auto" = this.agentMode ? "agent" : "auto") {
+    const view = await this.write(() => this.createTask(request, mode));
+    if (mode === "auto") this.startRun(view.id, this.brain);
+    return view;
+  }
+
+  private startRun(taskId: string, brain: Brain) {
+    this.defer(this.run(taskId, brain).catch((e) => console.error("task failed", taskId, e)));
+  }
+
+  // ---- agent mode: an AI assistant does the thinking over MCP -----------------
+
+  /** Everything an agent needs to act: open tasks, what each needs next, and the team. */
+  async agentWork() {
+    await this.ready(true);
+    const team = this.data.employees.filter((e) => e.roleId !== "general_manager");
+    const byId = new Map(this.data.employees.map((e) => [e.id, e]));
+    const open = this.data.tasks
+      .filter((t) => t.mode === "agent" && !t.summary)
+      .map((t) => {
+        const missing = t.subtasks.filter((s) => !s.deliverable);
+        return {
+          taskId: t.id,
+          request: t.request,
+          next: !t.planned ? ("plan" as const) : missing.length ? ("deliverables" as const) : ("report" as const),
+          understanding: t.understanding,
+          subtasks: t.subtasks.map((s) => {
+            const e = byId.get(s.assigneeId);
+            return {
+              subtaskId: s.id,
+              assignee: e ? { id: e.id, name: e.name, title: e.title, role: ROLES[e.roleId].title, jobDescription: e.jobDescription } : undefined,
+              title: s.title,
+              brief: s.brief,
+              delivered: Boolean(s.deliverable),
+              deliverable: s.deliverable,
+            };
+          }),
+        };
+      });
+    return {
+      gm: this.data.employees.find((e) => e.roleId === "general_manager")?.name ?? "عمر",
+      team: team.map((e) => ({ id: e.id, name: e.name, title: e.title, role: ROLES[e.roleId].title, jobDescription: e.jobDescription })),
+      tasks: open,
+    };
+  }
+
+  submitPlan(taskId: string, plan: Plan, agent?: string) {
+    return this.write(() => {
+      const t = this.task(taskId);
+      if (t.mode !== "agent") throw new Error("This task is handled by templates, not by an agent.");
+      if (t.planned) throw new Error("This task already has a plan. Submit deliverables next.");
+      const ok = new Set(this.data.employees.filter((e) => e.roleId !== "general_manager").map((e) => e.id));
+      const bad = plan.subtasks.filter((s) => !ok.has(s.assigneeId));
+      if (bad.length) throw new Error(`Unknown or invalid assigneeId: ${bad.map((b) => b.assigneeId).join(", ")}. Use ids from the team list (not the GM).`);
+      if (!plan.subtasks.length) throw new Error("A plan needs at least one subtask.");
+      t.ai = true;
+      if (agent) t.agent = agent.slice(0, 40);
+      this.applyPlan(t, plan);
+      return this.viewTask(t, Date.now());
+    });
+  }
+
+  submitDeliverable(taskId: string, subtaskId: string, content: string) {
+    return this.write(() => {
+      const t = this.task(taskId);
+      const sub = t.subtasks.find((s) => s.id === subtaskId);
+      if (!sub) throw new Error("Unknown subtaskId for this task. Call get_pending_work for the ids.");
+      if (content.trim().length < 20) throw new Error("Deliverable is too short; write the actual work.");
+      this.applyDeliverable(sub, content.trim());
+      return this.viewTask(t, Date.now());
+    });
+  }
+
+  submitReport(taskId: string, summary: string) {
+    return this.write(() => {
+      const t = this.task(taskId);
+      const missing = t.subtasks.filter((s) => !s.deliverable);
+      if (!t.planned || missing.length) throw new Error(`Submit all deliverables first (${missing.length} missing).`);
+      t.summary = summary.trim();
+      t.summaryAt = Date.now();
+      return this.viewTask(t, Date.now());
+    });
+  }
+
+  /** Finish an agent task with templates (user didn't want to wait for an agent). */
+  async finishWithTemplates(taskId: string) {
+    const view = await this.write(() => {
+      const t = this.task(taskId);
+      if (t.summary) throw new Error("المهمة دي خلصت خلاص.");
+      t.mode = "auto";
+      return this.viewTask(t, Date.now());
+    });
+    this.startRun(taskId, this.mock);
     return view;
   }
   async getTask(id: string) {
@@ -187,7 +282,7 @@ export class Office {
     return `تم الاستغناء عن ${e.name}.`;
   }
 
-  private createTask(request: string): TaskView {
+  private createTask(request: string, mode: "agent" | "auto"): TaskView {
     const text = request.trim().slice(0, 1000);
     if (!text) throw new Error("اكتب الطلب الأول.");
     if (!this.data.employees.some((e) => e.roleId !== "general_manager" && e.roleId !== "hr_manager"))
@@ -199,7 +294,8 @@ export class Office {
       planningMs: MIN_MEETING_MS,
       planned: false,
       subtasks: [],
-      ai: this.brain.ai,
+      ai: mode === "auto" && this.brain.ai,
+      mode,
     };
     this.data.tasks.unshift(task);
     this.data.tasks = this.data.tasks.slice(0, 30);
@@ -213,8 +309,8 @@ export class Office {
   }
 
   /** Try the configured brain, fall back to templates so a task always finishes. */
-  private async think<T>(taskId: string, step: string, ai: () => Promise<T>, mock: () => Promise<T>): Promise<T> {
-    if (this.brain.ai) {
+  private async think<T>(taskId: string, step: string, brain: Brain, ai: () => Promise<T>, mock: () => Promise<T>): Promise<T> {
+    if (brain.ai) {
       try {
         return await ai();
       } catch (e) {
@@ -231,78 +327,83 @@ export class Office {
     return mock();
   }
 
-  private async run(taskId: string) {
+  /** The GM's plan becomes timed subtasks; the team gathers briefly first. */
+  private applyPlan(t: Task, plan: Plan) {
+    const now = Date.now();
+    const byId = new Map(this.data.employees.map((e) => [e.id, e]));
+    t.understanding = plan.understanding;
+    t.planningMs = Math.max(MIN_MEETING_MS, now - t.createdAt + GATHER_MS);
+    const meetingEnds = t.createdAt + t.planningMs;
+    // One subtask at a time per person: queue after their current work.
+    const busyUntil = new Map<string, number>();
+    for (const other of this.data.tasks)
+      for (const s of other.subtasks)
+        busyUntil.set(s.assigneeId, Math.max(busyUntil.get(s.assigneeId) ?? 0, s.doneAt ?? s.startAt + s.durationMs));
+    t.subtasks = plan.subtasks
+      .filter((p) => byId.has(p.assigneeId))
+      .slice(0, 6)
+      .map((p, i) => {
+        const startAt = Math.max(meetingEnds + i * 1_200, Math.min((busyUntil.get(p.assigneeId) ?? 0) + 1_000, now + 120_000));
+        const durationMs = Math.round((14_000 + (hash(t.request + p.assigneeId) % 10_000)) * this.speed);
+        busyUntil.set(p.assigneeId, startAt + durationMs);
+        return { id: randomUUID(), assigneeId: p.assigneeId, title: p.title.trim(), brief: p.brief.trim(), startAt, durationMs };
+      });
+    t.planned = true;
+  }
+
+  /** Shows once its slot elapses, so the office animation stays believable. */
+  private applyDeliverable(sub: Subtask, text: string) {
+    sub.deliverable = text;
+    sub.doneAt = Math.max(Date.now(), sub.startAt + sub.durationMs);
+  }
+
+  /** Runs whatever is left of a task with the given brain: plan, deliverables, report. */
+  private async run(taskId: string, brain: Brain) {
     const { request } = this.task(taskId);
     const team = [...this.data.employees];
     const byId = new Map(team.map((e) => [e.id, e]));
 
-    // 1) The GM reads the request and splits it.
-    let plan: Plan = await this.think(
-      taskId,
-      "plan",
-      () => this.brain.plan(request, team),
-      () => this.mock.plan(request, team),
-    );
-    if (!plan.subtasks.length) plan = await this.mock.plan(request, team);
+    if (!this.task(taskId).planned) {
+      let plan: Plan = await this.think(taskId, "plan", brain, () => brain.plan(request, team), () => this.mock.plan(request, team));
+      if (!plan.subtasks.length) plan = await this.mock.plan(request, team);
+      await this.write(() => this.applyPlan(this.task(taskId), plan));
+    }
+    const understanding = this.task(taskId).understanding ?? "";
 
-    const subtasks = await this.write(() => {
-      const t = this.task(taskId);
-      const now = Date.now();
-      t.understanding = plan.understanding;
-      // The team gathers in the meeting room for a moment once roles are known.
-      t.planningMs = Math.max(MIN_MEETING_MS, now - t.createdAt + GATHER_MS);
-      const meetingEnds = t.createdAt + t.planningMs;
-      // One subtask at a time per person: queue after their current work.
-      const busyUntil = new Map<string, number>();
-      for (const other of this.data.tasks)
-        for (const s of other.subtasks)
-          busyUntil.set(s.assigneeId, Math.max(busyUntil.get(s.assigneeId) ?? 0, s.doneAt ?? s.startAt + s.durationMs));
-      t.subtasks = plan.subtasks
-        .filter((p) => byId.has(p.assigneeId))
-        .map((p, i) => {
-          const startAt = Math.max(meetingEnds + i * 1_200, (busyUntil.get(p.assigneeId) ?? 0) + 1_000);
-          const durationMs = Math.round((14_000 + (hash(request + p.assigneeId) % 10_000)) * this.speed);
-          busyUntil.set(p.assigneeId, startAt + durationMs);
-          return { id: randomUUID(), assigneeId: p.assigneeId, title: p.title, brief: p.brief, startAt, durationMs };
-        });
-      t.planned = true;
-      return t.subtasks.map((s) => ({ ...s }));
-    });
-
-    // 2) Everyone works in parallel. The result shows once its slot elapses,
-    //    so the office animation stays believable however fast the model is.
     const results = await Promise.all(
-      subtasks.map(async (s) => {
+      this.task(taskId).subtasks.map(async (s) => {
         const emp = byId.get(s.assigneeId)!;
+        if (s.deliverable) return { employee: emp, title: s.title, deliverable: s.deliverable };
         const brief = { assigneeId: s.assigneeId, title: s.title, brief: s.brief };
         const deliverable = await this.think(
           taskId,
           "deliverable",
-          () => this.brain.deliverable(emp, brief, request, plan.understanding),
-          () => this.mock.deliverable(emp, brief, request, plan.understanding),
+          brain,
+          () => brain.deliverable(emp, brief, request, understanding),
+          () => this.mock.deliverable(emp, brief, request, understanding),
         );
         await this.write(() => {
           const sub = this.task(taskId).subtasks.find((x) => x.id === s.id);
-          if (!sub) return;
-          sub.deliverable = deliverable;
-          sub.doneAt = Math.max(Date.now(), sub.startAt + sub.durationMs);
+          if (sub && !sub.deliverable) this.applyDeliverable(sub, deliverable);
         });
         return { employee: emp, title: s.title, deliverable };
       }),
     );
 
-    // 3) The GM reviews and reports.
-    const summary = await this.think(
-      taskId,
-      "summary",
-      () => this.brain.summary(request, plan.understanding, results),
-      () => this.mock.summary(request, plan.understanding, results),
-    );
-    await this.write(() => {
-      const t = this.task(taskId);
-      t.summary = summary;
-      t.summaryAt = Date.now();
-    });
+    if (!this.task(taskId).summary) {
+      const summary = await this.think(
+        taskId,
+        "summary",
+        brain,
+        () => brain.summary(request, understanding, results),
+        () => this.mock.summary(request, understanding, results),
+      );
+      await this.write(() => {
+        const t = this.task(taskId);
+        t.summary = summary;
+        t.summaryAt = Date.now();
+      });
+    }
   }
 
   // ---- views ----------------------------------------------------------------
@@ -389,18 +490,22 @@ export class Office {
   }
 
   private taskStatus(t: Task, now: number): TaskView["status"] {
+    const agent = t.mode === "agent";
+    if (agent && !t.planned) return "waiting";
+    // Agent tasks never time out: they finish when the agent submits the report.
+    const stale = !agent && now - t.createdAt > STALE_MS;
     if (!t.planned || now < t.createdAt + t.planningMs) {
       // A plan that never arrives (crashed instance) shouldn't freeze the office.
-      if (!t.planned && now - t.createdAt > STALE_MS) return "done";
+      if (!t.planned && stale) return "done";
       return "planning";
     }
     const states = t.subtasks.map((s) => subtaskState(s, now));
     if (states.some((x) => x.status !== "done")) {
-      if (now - t.createdAt > STALE_MS) return "done";
+      if (stale) return "done";
       return "in_progress";
     }
     const lastDone = Math.max(...t.subtasks.map((s) => s.doneAt ?? 0));
-    if (!t.summary || now < Math.max(lastDone + REVIEW_MS, t.summaryAt ?? 0)) return now - t.createdAt > STALE_MS ? "done" : "reviewing";
+    if (!t.summary || now < Math.max(lastDone + REVIEW_MS, t.summaryAt ?? 0)) return stale ? "done" : "reviewing";
     return "done";
   }
 
@@ -422,7 +527,9 @@ export class Office {
     const status = this.taskStatus(t, now);
     const work = subtasks.length ? subtasks.reduce((a, s) => a + s.progress, 0) / subtasks.length : 0;
     const progress =
-      status === "planning"
+      status === "waiting"
+        ? 0
+        : status === "planning"
         ? Math.min(0.08, 0.08 * ((now - t.createdAt) / t.planningMs))
         : status === "done"
           ? 1
@@ -440,6 +547,8 @@ export class Office {
       summary: status === "done" ? t.summary : undefined,
       ai: Boolean(t.ai),
       error: t.error,
+      mode: t.mode ?? "auto",
+      agent: t.agent,
     };
   }
 }

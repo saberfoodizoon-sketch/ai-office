@@ -6,6 +6,8 @@ export interface OfficeClient {
   hire(input: HireInput): Promise<HireResult>;
   assign(request: string): Promise<TaskView>;
   fire(employeeId: string): Promise<string>;
+  /** Finish a task that's waiting for an AI agent with built-in templates. */
+  finishWithTemplates(taskId: string): Promise<TaskView>;
   reset?(): Promise<void>;
   /** Present only where the host supports it (ChatGPT fullscreen). */
   toggleFullscreen?(): Promise<void>;
@@ -23,6 +25,7 @@ export const restClient: OfficeClient = {
   getOffice: () => call("/api/office"),
   hire: (input) => call("/api/hire", { method: "POST", body: JSON.stringify(input) }),
   assign: (request) => call("/api/tasks", { method: "POST", body: JSON.stringify({ request }) }),
+  finishWithTemplates: (id) => call(`/api/tasks/${id}/templates`, { method: "POST" }),
   fire: async (id) => (await call<{ message: string }>(`/api/employees/${id}`, { method: "DELETE" })).message,
   reset: async () => void (await call("/api/reset", { method: "POST" })),
 };

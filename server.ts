@@ -18,15 +18,21 @@ const PUBLIC_ORIGIN =
   process.env.PUBLIC_ORIGIN ??
   (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : undefined);
 
-// Real model through AI Gateway when credentials exist (always on Vercel), else templates.
-const brain = AiBrain.available() && process.env.BRAIN !== "mock" ? new AiBrain() : new MockBrain();
-console.log(`brain: ${brain.ai ? "AI Gateway" : "templates"}`);
+// Who does the thinking (BRAIN env):
+//   "agent"   (default) — the AI assistant connected over MCP (Claude, ChatGPT, Codex)
+//             acts as the GM and the team; tasks wait for it. No API key, no cost here.
+//   "gateway" — the server calls a model through Vercel AI Gateway itself.
+//   "mock"    — built-in templates only.
+const BRAIN = (process.env.BRAIN ?? "agent").toLowerCase();
+const brain = BRAIN === "gateway" && AiBrain.available() ? new AiBrain() : new MockBrain();
+console.log(`brain: ${BRAIN === "agent" ? "connected AI agent (MCP)" : brain.ai ? "AI Gateway" : "templates"}`);
 
 export const office = new Office(
   brain,
   defaultStore(process.env.DATA_FILE ?? "data/office.json"),
   SPEED,
   (p) => waitUntil(p),
+  BRAIN === "agent",
 );
 
 const app = express();
@@ -47,6 +53,7 @@ const handle =
 app.get("/api/office", handle(() => office.snapshot()));
 app.post("/api/hire", handle((req) => office.hire(req.body ?? {})));
 app.post("/api/tasks", handle((req) => office.assign(String(req.body?.request ?? ""))));
+app.post("/api/tasks/:id/templates", handle((req) => office.finishWithTemplates(String(req.params.id))));
 app.delete("/api/employees/:id", handle(async (req) => ({ message: await office.fire(String(req.params.id)) })));
 app.post("/api/reset", handle(async () => (await office.reset(), { ok: true })));
 app.get("/api/health", (_req, res) => res.json({ ok: true }));

@@ -47,6 +47,14 @@ export function Panel({ snap, client, tab, setTab, selected, onSelect, notify, o
   const gm = snap.employees.find((e) => e.roleId === "general_manager");
   const hr = snap.employees.find((e) => e.roleId === "hr_manager");
   const active = snap.tasks.filter((t) => t.status !== "done").length;
+  const templates = async (taskId: string) => {
+    try {
+      await client.finishWithTemplates(taskId);
+      notify("الفريق هيكمّل المهمة بالقوالب");
+    } catch (e) {
+      notify((e as Error).message, "err");
+    }
+  };
 
   return (
     <aside className="panel">
@@ -68,7 +76,7 @@ export function Panel({ snap, client, tab, setTab, selected, onSelect, notify, o
         {selected ? (
           <EmployeeCard e={selected} snap={snap} client={client} onClose={() => onSelect(null)} notify={notify} />
         ) : tab === "gm" ? (
-          <GmTab snap={snap} client={client} gm={gm} notify={notify} onFocus={(id) => onSelect(id)} />
+          <GmTab snap={snap} client={client} gm={gm} notify={notify} onFocus={(id) => onSelect(id)} templates={templates} />
         ) : tab === "hr" ? (
           <HrTab snap={snap} client={client} hr={hr} notify={notify} onSelect={onSelect} />
         ) : tab === "team" ? (
@@ -84,7 +92,7 @@ export function Panel({ snap, client, tab, setTab, selected, onSelect, notify, o
             {snap.tasks.map((t) => (
               <div key={t.id}>
                 <p className="req">«{t.request}»</p>
-                <TaskCard task={t} gmName={gm?.name} onFocus={(id) => onSelect(id)} />
+                <TaskCard task={t} gmName={gm?.name} onFocus={(id) => onSelect(id)} onTemplates={templates} />
               </div>
             ))}
           </div>
@@ -94,7 +102,7 @@ export function Panel({ snap, client, tab, setTab, selected, onSelect, notify, o
   );
 }
 
-function GmTab({ snap, client, gm, notify, onFocus }: { snap: OfficeSnapshot; client: OfficeClient; gm?: EmployeeView; notify: Props["notify"]; onFocus: (id: string) => void }) {
+function GmTab({ snap, client, gm, notify, onFocus, templates }: { snap: OfficeSnapshot; client: OfficeClient; gm?: EmployeeView; notify: Props["notify"]; onFocus: (id: string) => void; templates: (id: string) => Promise<void> }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -105,7 +113,7 @@ function GmTab({ snap, client, gm, notify, onFocus }: { snap: OfficeSnapshot; cl
     try {
       await client.assign(text);
       setText("");
-      notify(`${gm?.name ?? "المدير"} استلم الطلب وبيقرأه دلوقتي`);
+      notify(`المهمة وصلت لـ ${gm?.name ?? "المدير"}`);
     } catch (err) {
       notify((err as Error).message, "err");
     } finally {
@@ -138,11 +146,13 @@ function GmTab({ snap, client, gm, notify, onFocus }: { snap: OfficeSnapshot; cl
               {gm && <Avatar e={gm} size={28} />}
               <div className="grow">
                 <p>
-                  {!t.subtasks.length
+                  {t.status === "waiting"
+                    ? "وصلتني. المهمة في انتظار الذكاء الاصطناعي المتوصّل بالمكتب عشان يفكّر فيها."
+                    : !t.subtasks.length
                     ? "تمام، بقرأ الطلب وبفكّر مين الأنسب لكل جزء…"
                     : `وزّعتها على: ${[...new Set(t.subtasks.map((s) => s.assigneeName))].join("، ")}`}
                 </p>
-                <TaskCard task={t} gmName={gm?.name} onFocus={onFocus} />
+                <TaskCard task={t} gmName={gm?.name} onFocus={onFocus} onTemplates={templates} />
               </div>
             </div>
           </div>

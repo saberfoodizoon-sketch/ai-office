@@ -5,6 +5,7 @@ import { Markdown } from "./Markdown";
 const SUB: Record<string, string> = { queued: "في الانتظار", working: "شغال", done: "اقرأ التسليم" };
 
 function statusLabel(task: TaskView, gm: string): string {
+  if (task.status === "waiting") return "مستنية المدير";
   if (task.status === "planning") return task.subtasks.length ? `${gm} بيشرح المهام للفريق` : `${gm} بيقرأ الطلب ويفكّر`;
   if (task.status === "in_progress") return "الفريق شغال";
   if (task.status === "reviewing") return `${gm} بيراجع الشغل`;
@@ -15,14 +16,27 @@ function copy(text: string) {
   navigator.clipboard?.writeText(text).catch(() => {});
 }
 
-export function TaskCard({ task, gmName = "المدير", onFocus }: { task: TaskView; gmName?: string; onFocus?: (employeeId: string) => void }) {
+interface Props {
+  task: TaskView;
+  gmName?: string;
+  onFocus?: (employeeId: string) => void;
+  /** Finish a waiting task with templates instead of an AI agent. */
+  onTemplates?: (taskId: string) => Promise<void>;
+}
+
+export function TaskCard({ task, gmName = "المدير", onFocus, onTemplates }: Props) {
   const [open, setOpen] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   return (
     <div className={`task task--${task.status}`}>
       <div className="task__head">
         <span className={`chip chip--${task.status}`}>{statusLabel(task, gmName)}</span>
         <span className="task__meta">
-          {task.ai && <span className="chip chip--ai" title="المدير والفريق شغالين بذكاء اصطناعي حقيقي">AI</span>}
+          {task.ai && (
+            <span className="chip chip--ai" title="المدير والفريق شغالين بذكاء اصطناعي حقيقي">
+              {task.agent || "AI"}
+            </span>
+          )}
           <span className="task__pct">{Math.round(task.progress * 100)}%</span>
         </span>
       </div>
@@ -33,6 +47,30 @@ export function TaskCard({ task, gmName = "المدير", onFocus }: { task: Tas
       {task.understanding && (
         <div className="understanding">
           <b>فهم {gmName} للمهمة:</b> {task.understanding}
+        </div>
+      )}
+      {task.status === "waiting" && (
+        <div className="waiting">
+          <p>
+            المهمة وصلت لـ {gmName} ومستنية «العقل» اللي هيفكّر فيها. افتح Claude أو ChatGPT أو Codex المتوصّل بالمكتب وقوله:
+          </p>
+          <code className="say">شوف المهام الجديدة في مكتبي الذكي واشتغل عليها</code>
+          {onTemplates && (
+            <button
+              className="ghost small"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  await onTemplates(task.id);
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              {busy ? "…" : "أو كمّلها بالقوالب دلوقتي"}
+            </button>
+          )}
         </div>
       )}
       {!task.subtasks.length && task.status === "planning" && (

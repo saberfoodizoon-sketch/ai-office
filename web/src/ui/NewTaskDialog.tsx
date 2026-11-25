@@ -37,7 +37,7 @@ export function NewTaskDialog({ client, gm, team, onClose, onCreated, onError }:
     setBusy(true);
     try {
       await client.assign(text);
-      onCreated(`${gm?.name ?? "المدير"} استلم المهمة وبيقرأها دلوقتي`);
+      onCreated(`المهمة وصلت لـ ${gm?.name ?? "المدير"}`);
       onClose();
     } catch (e) {
       onError((e as Error).message);
@@ -56,7 +56,7 @@ export function NewTaskDialog({ client, gm, team, onClose, onCreated, onError }:
         </header>
         <ol className="steps">
           <li>اكتب المطلوب بالتفصيل: الهدف، الجمهور، الأسلوب، وأي قيود.</li>
-          <li>{gm?.name ?? "المدير"} هيكتب فهمه للمهمة ويقسّمها ويختار لكل جزء الشخص المناسب.</li>
+          <li>قول لـ Claude أو ChatGPT أو Codex المتوصّل بالمكتب: «شوف المهام الجديدة»، وهو يبقى {gm?.name ?? "المدير"}: يكتب فهمه ويقسّم ويختار لكل جزء الشخص المناسب.</li>
           <li>كل موظف بيسلّم شغله، وفي الآخر المدير بيراجع ويكتبلك تقرير.</li>
         </ol>
         <textarea

@@ -59,6 +59,13 @@ export interface Task {
   /** True when a real model did the work (false = template fallback). */
   ai?: boolean;
   error?: string;
+  /**
+   * "agent": an AI assistant connected over MCP (Claude, ChatGPT, Codex) acts as
+   * the GM and the team. "auto": the server's own brain (templates) does it.
+   */
+  mode?: "agent" | "auto";
+  /** Who did the thinking, e.g. "Claude" — shown in the UI. */
+  agent?: string;
 }
 
 export interface OfficeData {
@@ -71,7 +78,7 @@ export interface OfficeData {
 
 export type Activity = "working" | "meeting" | "idle" | "break";
 export type SubtaskStatus = "queued" | "working" | "done";
-export type TaskStatus = "planning" | "in_progress" | "reviewing" | "done";
+export type TaskStatus = "waiting" | "planning" | "in_progress" | "reviewing" | "done";
 
 export interface EmployeeView {
   id: string;
@@ -113,6 +120,8 @@ export interface TaskView {
   summary?: string;
   ai: boolean;
   error?: string;
+  mode: "agent" | "auto";
+  agent?: string;
 }
 
 export interface OfficeSnapshot {

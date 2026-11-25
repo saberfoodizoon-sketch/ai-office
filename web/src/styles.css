@@ -273,3 +273,9 @@ section h4 { margin: 4px 0 6px; font-size: 13.5px; }
 @media (max-width: 820px) {
   .new-task { padding: 7px 12px; font-size: 13px; }
 }
+
+/* ---------- waiting for the connected AI ---------- */
+.chip--waiting { background: color-mix(in srgb, var(--muted) 15%, transparent); color: var(--muted); }
+.waiting { margin: 10px 0 2px; padding: 10px 12px; border-radius: 10px; border: 1px dashed var(--line); background: var(--panel-2); font-size: 13px; line-height: 1.7; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.waiting p { margin: 0; }
+.say { display: block; width: 100%; padding: 7px 10px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); font-family: inherit; font-size: 13px; user-select: all; }

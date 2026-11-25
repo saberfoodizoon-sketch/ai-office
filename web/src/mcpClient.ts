@@ -25,6 +25,7 @@ export async function createMcpClient(): Promise<OfficeClient> {
     getOffice: () => tool<OfficeSnapshot>("office_live_state"),
     hire: (input) => tool<HireResult>("hire_employee", { ...input, name: input.name || undefined }),
     assign: async (request) => (await tool<{ task: TaskView }>("assign_task", { request })).task,
+    finishWithTemplates: async (taskId) => (await tool<{ task: TaskView }>("finish_with_templates", { taskId })).task,
     fire: async (employeeId) => (await tool<{ message: string }>("fire_employee", { employeeId })).message,
     ...(canFullscreen
       ? {
