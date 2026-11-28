@@ -1,8 +1,6 @@
 // Where the office (team + tasks) is persisted.
 // - RedisStore: Upstash Redis (Vercel Marketplace), shared by every function
 //   instance. Chosen when UPSTASH_REDIS_REST_URL or KV_REST_API_URL is set.
-// - BlobStore: one private JSON blob in Vercel Blob (BLOB_READ_WRITE_TOKEN).
-//   Works, but Blob's operation quota is small for an app that polls.
 // - FileStore: a JSON file, for running locally.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -58,26 +56,6 @@ export class FileStore implements Store {
   }
 }
 
-export class BlobStore implements Store {
-  constructor(private pathname = "office/state.json") {}
-  async load() {
-    const { get } = await import("@vercel/blob");
-    // useCache:false → read the latest write, not a CDN copy.
-    const r = await get(this.pathname, { access: "private", useCache: false });
-    if (!r || r.statusCode !== 200) return null;
-    return JSON.parse(await new Response(r.stream).text()) as OfficeData;
-  }
-  async save(data: OfficeData) {
-    const { put } = await import("@vercel/blob");
-    await put(this.pathname, JSON.stringify(data), {
-      access: "private",
-      allowOverwrite: true,
-      addRandomSuffix: false,
-      contentType: "application/json",
-    });
-  }
-}
-
 /**
  * Keeps the office usable if the real store fails (quota, outage): falls back to
  * this instance's memory and retries the real store after a cooldown.
@@ -124,7 +102,6 @@ export class ResilientStore implements Store {
 
 export function defaultStore(file: string): Store {
   if (process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL) return new ResilientStore(new RedisStore());
-  if (process.env.BLOB_READ_WRITE_TOKEN && process.env.STORE !== "file") return new ResilientStore(new BlobStore());
   return new FileStore(file);
 }
 
