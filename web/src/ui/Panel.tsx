@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import type { EmployeeView, OfficeSnapshot } from "../../../shared/types";
 import type { OfficeClient } from "../client";
-import { Markdown } from "./Markdown";
+import { ErrorBoundary } from "./ErrorBoundary";
+import { Markdown as RawMarkdown } from "./Markdown";
+
+const Markdown = ({ text }: { text: string }) => (
+  <ErrorBoundary>
+    <RawMarkdown text={text} />
+  </ErrorBoundary>
+);
 import { TaskCard } from "./TaskCard";
 
 export type Tab = "gm" | "hr" | "team" | "tasks";
@@ -74,7 +81,7 @@ export function Panel({ snap, client, tab, setTab, selected, onSelect, notify, o
       </nav>
       <div className="panel__body">
         {selected ? (
-          <EmployeeCard e={selected} snap={snap} client={client} onClose={() => onSelect(null)} notify={notify} />
+          <EmployeeCard key={selected.id} e={selected} snap={snap} client={client} onClose={() => onSelect(null)} notify={notify} />
         ) : tab === "gm" ? (
           <GmTab snap={snap} client={client} gm={gm} notify={notify} onFocus={(id) => onSelect(id)} templates={templates} />
         ) : tab === "hr" ? (
@@ -288,7 +295,9 @@ function EmployeeCard({ e, snap, client, onClose, notify }: { e: EmployeeView; s
   const work = snap.tasks.flatMap((t) => t.subtasks.filter((s) => s.assigneeId === e.id).map((s) => ({ ...s, request: t.request })));
   const [open, setOpen] = useState<string | null>(null);
   const [confirm, setConfirm] = useState(false);
-  const protectedRole = e.roleId === "general_manager" || e.roleId === "hr_manager";
+  const [firing, setFiring] = useState(false);
+  // Only the founding GM and HR (fixed desks) can't be let go.
+  const protectedRole = e.desk < 0;
 
   return (
     <div className="stack">
@@ -346,17 +355,20 @@ function EmployeeCard({ e, snap, client, onClose, notify }: { e: EmployeeView; s
             <span>متأكد إنك عايز تستغنى عن {e.name}؟</span>
             <button
               className="danger small"
+              disabled={firing}
               onClick={async () => {
+                setFiring(true);
                 try {
                   notify(await client.fire(e.id));
                   onClose();
                 } catch (err) {
                   notify((err as Error).message, "err");
                   setConfirm(false);
+                  setFiring(false);
                 }
               }}
             >
-              أيوه
+              {firing ? "…" : "أيوه"}
             </button>
             <button className="ghost small" onClick={() => setConfirm(false)}>
               لأ

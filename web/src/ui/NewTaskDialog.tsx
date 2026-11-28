@@ -23,14 +23,38 @@ export function NewTaskDialog({ client, gm, team, onClose, onCreated, onError }:
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
+  const dialog = useRef<HTMLDivElement>(null);
+  const busyRef = useRef(false);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  busyRef.current = busy;
   const workers = team.filter((e) => e.roleId !== "general_manager" && e.roleId !== "hr_manager");
 
+  // Focus once on open, keep Tab inside the dialog, and give focus back on close.
   useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
     box.current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busyRef.current) closeRef.current();
+      if (e.key !== "Tab" || !dialog.current) return;
+      const items = dialog.current.querySelectorAll<HTMLElement>("button:not([disabled]), textarea, [href], input");
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      opener?.focus?.();
+    };
+  }, []);
 
   async function submit() {
     if (!text.trim() || busy) return;
@@ -46,8 +70,8 @@ export function NewTaskDialog({ client, gm, team, onClose, onCreated, onError }:
   }
 
   return (
-    <div className="dialog-backdrop" onClick={onClose}>
-      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="nt-title" onClick={(e) => e.stopPropagation()}>
+    <div className="dialog-backdrop" onClick={() => !busy && onClose()}>
+      <div ref={dialog} className="dialog" role="dialog" aria-modal="true" aria-labelledby="nt-title" onClick={(e) => e.stopPropagation()}>
         <header className="dialog__head">
           <h2 id="nt-title">مهمة جديدة لـ {gm?.name ?? "المدير"}</h2>
           <button className="ghost small" onClick={onClose} aria-label="إغلاق">

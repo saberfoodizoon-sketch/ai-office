@@ -12,6 +12,8 @@ export interface OfficeClient {
   /** Present only where the host supports it (ChatGPT fullscreen). */
   toggleFullscreen?(): Promise<void>;
   isFullscreen?: () => boolean;
+  /** Notifies when the host changes the display mode itself; returns an unsubscribe. */
+  onDisplayModeChange?: (cb: (mode: string) => void) => () => void;
 }
 
 async function call<T>(url: string, init?: RequestInit): Promise<T> {
@@ -27,5 +29,8 @@ export const restClient: OfficeClient = {
   assign: (request) => call("/api/tasks", { method: "POST", body: JSON.stringify({ request }) }),
   finishWithTemplates: (id) => call(`/api/tasks/${id}/templates`, { method: "POST" }),
   fire: async (id) => (await call<{ message: string }>(`/api/employees/${id}`, { method: "DELETE" })).message,
-  reset: async () => void (await call("/api/reset", { method: "POST" })),
+  // Reset only exists when running locally; the online office is shared.
+  ...(typeof location !== "undefined" && /^(localhost|127\.0\.0\.1)$/.test(location.hostname)
+    ? { reset: async () => void (await call("/api/reset", { method: "POST" })) }
+    : {}),
 };

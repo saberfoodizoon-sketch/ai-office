@@ -279,3 +279,10 @@ section h4 { margin: 4px 0 6px; font-size: 13.5px; }
 .waiting { margin: 10px 0 2px; padding: 10px 12px; border-radius: 10px; border: 1px dashed var(--line); background: var(--panel-2); font-size: 13px; line-height: 1.7; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 .waiting p { margin: 0; }
 .say { display: block; width: 100%; padding: 7px 10px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); font-family: inherit; font-size: 13px; user-select: all; }
+
+/* ---------- review fixes ---------- */
+.offline { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 45; background: color-mix(in srgb, var(--warn) 18%, var(--panel)); color: var(--text); border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--line)); border-radius: 10px; padding: 6px 14px; font-size: 13px; direction: rtl; box-shadow: var(--shadow); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #17181b; }
+}
+:root[data-theme="dark"] { --bg: #17181b; }

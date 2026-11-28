@@ -1,6 +1,13 @@
 import { useState } from "react";
 import type { TaskView } from "../../../shared/types";
-import { Markdown } from "./Markdown";
+import { ErrorBoundary } from "./ErrorBoundary";
+import { Markdown as RawMarkdown } from "./Markdown";
+
+const Markdown = ({ text }: { text: string }) => (
+  <ErrorBoundary>
+    <RawMarkdown text={text} />
+  </ErrorBoundary>
+);
 
 const SUB: Record<string, string> = { queued: "في الانتظار", working: "شغال", done: "اقرأ التسليم" };
 

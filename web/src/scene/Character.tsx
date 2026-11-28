@@ -1,6 +1,6 @@
 import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
-import { useMemo, useRef, type RefObject } from "react";
+import { memo, useEffect, useMemo, useRef, type RefObject } from "react";
 import type { Group } from "three";
 import { route, type Vec2 } from "../../../shared/layout";
 import type { EmployeeView } from "../../../shared/types";
@@ -35,7 +35,7 @@ interface Props {
   portal: RefObject<HTMLElement>;
 }
 
-export function Character({ employee: e, target, start, selected, showLabel, onSelect, portal }: Props) {
+function CharacterImpl({ employee: e, target, start, selected, showLabel, onSelect, portal }: Props) {
   const root = useRef<Group>(null);
   const body = useRef<Group>(null);
   const legL = useRef<Group>(null);
@@ -47,7 +47,8 @@ export function Character({ employee: e, target, start, selected, showLabel, onS
   const st = useRef({
     pos: { x: start.x, z: start.z },
     path: [] as Vec2[],
-    key: "",
+    tx: NaN,
+    tz: NaN,
     heading: target.face,
     arrived: false,
     sitBlend: 0,
@@ -64,16 +65,19 @@ export function Character({ employee: e, target, start, selected, showLabel, onS
     };
   }, [e.look]);
 
+  // If this person disappears while hovered, don't leave the pointer cursor behind.
+  useEffect(() => () => void (document.body.style.cursor = ""), []);
+
   useFrame((state, dt) => {
     const s = st.current;
     const t = state.clock.elapsedTime + look.phase;
     dt = Math.min(dt, 0.05);
 
     // New destination → plan a corridor route from where we are.
-    const key = `${target.x.toFixed(2)},${target.z.toFixed(2)}`;
-    if (key !== s.key) {
-      const first = s.key === "";
-      s.key = key;
+    if (target.x !== s.tx || target.z !== s.tz) {
+      const first = Number.isNaN(s.tx);
+      s.tx = target.x;
+      s.tz = target.z;
       const d = Math.hypot(target.x - s.pos.x, target.z - s.pos.z);
       s.path = first && d < 0.01 ? [] : d < 1.2 ? [target] : route(s.pos, target);
       s.arrived = s.path.length === 0;
@@ -250,3 +254,26 @@ function lerpAngle(a: number, b: number, t: number) {
   if (d < -Math.PI) d += Math.PI * 2;
   return a + d * t;
 }
+
+/** Re-render only when something this character shows or targets changes. */
+export const Character = memo(CharacterImpl, (a, b) => {
+  const ea = a.employee;
+  const eb = b.employee;
+  return (
+    a.selected === b.selected &&
+    a.showLabel === b.showLabel &&
+    a.onSelect === b.onSelect &&
+    a.portal === b.portal &&
+    a.target.x === b.target.x &&
+    a.target.z === b.target.z &&
+    a.target.face === b.target.face &&
+    a.target.sit === b.target.sit &&
+    a.target.pose === b.target.pose &&
+    ea.name === eb.name &&
+    ea.title === eb.title &&
+    ea.color === eb.color &&
+    ea.look === eb.look &&
+    ea.activity === eb.activity &&
+    Math.round((ea.doingProgress ?? -1) * 20) === Math.round((eb.doingProgress ?? -1) * 20)
+  );
+});

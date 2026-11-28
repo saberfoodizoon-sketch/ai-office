@@ -101,9 +101,15 @@ export const WORKER_ROLES: RoleId[] = (Object.keys(ROLES) as RoleId[]).filter(
   (r) => r !== "general_manager" && r !== "hr_manager",
 );
 
+/** Short Latin keywords (hr, pm, ui, api…) must match whole words, not substrings like "cHRome". */
+function hasKeyword(text: string, k: string): boolean {
+  if (/^[a-z]{1,4}$/.test(k)) return new RegExp(`(^|[^a-z])${k}([^a-z]|$)`).test(text);
+  return text.includes(k);
+}
+
 export function scoreRole(role: RoleId, text: string): number {
   const t = text.toLowerCase();
-  return ROLES[role].keywords.reduce((n, k) => (t.includes(k) ? n + 1 : n), 0);
+  return ROLES[role].keywords.reduce((n, k) => (hasKeyword(t, k) ? n + 1 : n), 0);
 }
 
 /** Picks the best matching role for a job title + description. */
@@ -111,7 +117,8 @@ export function classifyRole(jobTitle: string, jobDescription: string): RoleId {
   let best: RoleId = "specialist";
   let bestScore = 0;
   for (const role of Object.keys(ROLES) as RoleId[]) {
-    if (role === "general_manager") continue;
+    // The office has one GM and one HR manager; hires get a working role.
+    if (role === "general_manager" || role === "hr_manager") continue;
     // The title counts three times as much as the description.
     const s = scoreRole(role, jobTitle) * 3 + scoreRole(role, jobDescription);
     if (s > bestScore) {

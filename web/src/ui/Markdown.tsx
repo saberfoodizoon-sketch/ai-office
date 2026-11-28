@@ -25,9 +25,10 @@ export function Markdown({ text }: { text: string }) {
       const rows: string[][] = [];
       while (i < lines.length && lines[i].startsWith("|")) {
         const cells = lines[i].split("|").slice(1, -1).map((c) => c.trim());
-        if (!cells.every((c) => /^-+$/.test(c))) rows.push(cells);
+        if (cells.length && !cells.every((c) => /^:?-+:?$/.test(c))) rows.push(cells);
         i++;
       }
+      if (!rows.length) continue;
       out.push(
         <table key={k}>
           <thead>

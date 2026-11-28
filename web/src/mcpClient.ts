@@ -16,8 +16,18 @@ export async function createMcpClient(): Promise<OfficeClient> {
   }
 
   let mode = app.getHostContext()?.displayMode ?? "inline";
+  const listeners = new Set<(m: string) => void>();
+  // Match the host's light/dark theme (CSS reads data-theme).
+  const applyTheme = (theme?: string) => {
+    if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+  };
+  applyTheme(app.getHostContext()?.theme);
   app.onhostcontextchanged = (ctx) => {
-    if (ctx.displayMode) mode = ctx.displayMode;
+    applyTheme(ctx.theme);
+    if (ctx.displayMode && ctx.displayMode !== mode) {
+      mode = ctx.displayMode;
+      listeners.forEach((cb) => cb(mode));
+    }
   };
   const canFullscreen = app.getHostContext()?.availableDisplayModes?.includes("fullscreen");
 
@@ -34,6 +44,10 @@ export async function createMcpClient(): Promise<OfficeClient> {
             mode = r.mode;
           },
           isFullscreen: () => mode === "fullscreen",
+          onDisplayModeChange: (cb: (m: string) => void) => {
+            listeners.add(cb);
+            return () => void listeners.delete(cb);
+          },
         }
       : {}),
   };

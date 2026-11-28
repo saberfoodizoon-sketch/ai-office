@@ -22,12 +22,19 @@ import type {
 } from "../shared/types.js";
 import { MockBrain, type Brain, type Plan } from "./brain.js";
 import type { Store } from "./store.js";
+import { multiLine, oneLine, UserError } from "./errors.js";
 
 /** Minimum meeting time, and how long the team sits together once the plan is known. */
 const MIN_MEETING_MS = 12_000;
 const GATHER_MS = 8_000;
 const REVIEW_MS = 4_000;
 const MAX_TEAM = DESK_COUNT + 2;
+/** Tasks kept in the shared state (older ones drop off). */
+const MAX_TASKS = 15;
+const MAX_DELIVERABLE = 8_000;
+const MAX_REPORT = 5_000;
+/** Global cap on user-initiated writes per day (protects the storage quota). */
+const DAILY_WRITE_CAP = Number(process.env.DAILY_WRITE_CAP ?? 2_000);
 
 const MALE = ["كريم", "أحمد", "مازن", "حسن", "طارق", "مصطفى", "عمرو", "سيف", "آدم", "شريف"];
 const FEMALE = ["نور", "سارة", "هنا", "ملك", "ريم", "جنى", "دينا", "فريدة", "ياسمين", "رنا"];
@@ -90,55 +97,85 @@ export class Office {
 
   // ---- persistence ----------------------------------------------------------
   // Status is derived from timestamps, so the stored data only changes on
-  // writes. Reads use a short-lived cache; writes always re-read first so
-  // concurrent instances don't overwrite each other's recent changes.
+  // writes. Reads use a short-lived cache checked against a version key; writes
+  // are compare-and-set and retried on conflict, so instances can't overwrite
+  // each other's changes.
 
   private async ready(force = false) {
     if (!force && this.data && Date.now() - this.loadedAt < CACHE_MS) return;
-    const version = this.store.version ? await this.store.version() : null;
-    if (this.data && version !== null && version === this.loadedVersion) {
-      this.loadedAt = Date.now();
-      return;
+    if (this.data && this.loadedVersion !== null && this.store.version) {
+      if ((await this.store.version()) === this.loadedVersion) {
+        this.loadedAt = Date.now();
+        return;
+      }
     }
-    const loaded = await this.store.load();
-    if (loaded) this.data = loaded;
-    else {
-      this.data = seedData(Date.now());
-      await this.store.save(this.data);
+    const r = await this.store.load();
+    if (r.data) {
+      this.data = r.data;
+      this.loadedVersion = r.version;
+    } else {
+      // First boot: seed, unless another instance seeded first.
+      const seed = seedData(Date.now());
+      const saved = await this.store.save(seed, r.version);
+      if (saved.ok) {
+        this.data = seed;
+        this.loadedVersion = saved.version;
+      } else {
+        const again = await this.store.load();
+        if (!again.data) throw new UserError("التخزين مش متاح دلوقتي. جرّب كمان دقيقة.");
+        this.data = again.data;
+        this.loadedVersion = again.version;
+      }
     }
-    this.loadedVersion = this.store.version ? await this.store.version() : null;
-    this.loadedAt = Date.now();
-  }
-
-  private async persist() {
-    await this.store.save(this.data);
-    this.loadedVersion = this.store.version ? await this.store.version() : null;
     this.loadedAt = Date.now();
   }
 
   private queue: Promise<unknown> = Promise.resolve();
 
-  /** Read-modify-write, serialized within this instance (background work writes too). */
+  /**
+   * Read-modify-write: serialized within this instance, compare-and-set across
+   * instances. On a conflict the latest state is re-read and `fn` re-applied,
+   * so `fn` must only change `this.data` (it may run more than once).
+   */
   private write<T>(fn: () => T): Promise<T> {
     const run = this.queue.then(async () => {
-      await this.ready(true);
-      const out = fn();
-      await this.persist();
-      return out;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        await this.ready(true);
+        const out = fn();
+        const saved = await this.store.save(this.data, this.loadedVersion);
+        if (saved.ok) {
+          this.loadedVersion = saved.version;
+          this.loadedAt = Date.now();
+          return out;
+        }
+        this.loadedVersion = null; // someone else wrote: force a full reload
+      }
+      throw new UserError("المكتب مشغول دلوقتي. جرّب تاني.");
     });
     this.queue = run.catch(() => undefined);
     return run;
   }
 
   async reset() {
-    this.data = seedData(Date.now());
-    await this.persist();
+    await this.charge();
+    await this.write(() => {
+      this.data = seedData(Date.now());
+    });
   }
 
-  hire(input: HireInput) {
+  /** Counts a user-initiated write against the daily cap (needs a store that supports it). */
+  private async charge() {
+    if (!this.store.bumpDaily) return;
+    const n = await this.store.bumpDaily();
+    if (n > DAILY_WRITE_CAP) throw new UserError("المكتب وصل للحد اليومي للتعديلات. جرّب بكرة.");
+  }
+
+  async hire(input: HireInput) {
+    await this.charge();
     return this.write(() => this.hireSync(input));
   }
-  fire(employeeId: string) {
+  async fire(employeeId: string) {
+    await this.charge();
     return this.write(() => this.fireSync(employeeId));
   }
   /**
@@ -146,6 +183,7 @@ export class Office {
    * background. `defer` keeps that work alive after the response (waitUntil on Vercel).
    */
   async assign(request: string, mode: "agent" | "auto" = this.agentMode ? "agent" : "auto") {
+    await this.charge();
     const view = await this.write(() => this.createTask(request, mode));
     if (mode === "auto") this.startRun(view.id, this.brain);
     return view;
@@ -179,7 +217,8 @@ export class Office {
               title: s.title,
               brief: s.brief,
               delivered: Boolean(s.deliverable),
-              deliverable: s.deliverable,
+              // Only the report step needs to read the work, and only an excerpt.
+              deliverable: !t.planned || t.subtasks.some((x) => !x.deliverable) ? undefined : s.deliverable?.slice(0, 1_500),
             };
           }),
         };
@@ -191,39 +230,53 @@ export class Office {
     };
   }
 
-  submitPlan(taskId: string, plan: Plan, agent?: string) {
+  async submitPlan(taskId: string, plan: Plan, agent?: string) {
+    await this.charge();
+    plan = {
+      understanding: oneLine(plan.understanding, 1_500),
+      subtasks: plan.subtasks.map((s) => ({ assigneeId: oneLine(s.assigneeId, 80), title: oneLine(s.title, 120), brief: oneLine(s.brief, 1_500) })),
+    };
     return this.write(() => {
       const t = this.task(taskId);
-      if (t.mode !== "agent") throw new Error("This task is handled by templates, not by an agent.");
-      if (t.planned) throw new Error("This task already has a plan. Submit deliverables next.");
+      if (t.mode !== "agent") throw new UserError("This task is handled by templates, not by an agent.");
+      if (t.planned) throw new UserError("This task already has a plan. Submit deliverables next.");
       const ok = new Set(this.data.employees.filter((e) => e.roleId !== "general_manager").map((e) => e.id));
       const bad = plan.subtasks.filter((s) => !ok.has(s.assigneeId));
-      if (bad.length) throw new Error(`Unknown or invalid assigneeId: ${bad.map((b) => b.assigneeId).join(", ")}. Use ids from the team list (not the GM).`);
-      if (!plan.subtasks.length) throw new Error("A plan needs at least one subtask.");
+      if (bad.length) throw new UserError(`Unknown or invalid assigneeId: ${bad.map((b) => b.assigneeId).join(", ")}. Use ids from the team list (not the GM).`);
+      if (!plan.subtasks.length) throw new UserError("A plan needs at least one subtask.");
       t.ai = true;
-      if (agent) t.agent = agent.slice(0, 40);
+      if (agent) t.agent = oneLine(agent, 40);
       this.applyPlan(t, plan);
       return this.viewTask(t, Date.now());
     });
   }
 
-  submitDeliverable(taskId: string, subtaskId: string, content: string) {
+  async submitDeliverable(taskId: string, subtaskId: string, content: string) {
+    await this.charge();
+    const text = multiLine(content, MAX_DELIVERABLE);
     return this.write(() => {
       const t = this.task(taskId);
+      // Finished work can't be overwritten, and template tasks aren't open to agents.
+      if (t.mode !== "agent" || t.summary) throw new UserError("This task is closed; its deliverables can't be changed.");
       const sub = t.subtasks.find((s) => s.id === subtaskId);
-      if (!sub) throw new Error("Unknown subtaskId for this task. Call get_pending_work for the ids.");
-      if (content.trim().length < 20) throw new Error("Deliverable is too short; write the actual work.");
-      this.applyDeliverable(sub, content.trim());
+      if (!sub) throw new UserError("Unknown subtaskId for this task. Call get_pending_work for the ids.");
+      if (sub.deliverable) throw new UserError("This subtask is already delivered.");
+      if (text.length < 20) throw new UserError("Deliverable is too short; write the actual work.");
+      this.applyDeliverable(sub, text);
       return this.viewTask(t, Date.now());
     });
   }
 
-  submitReport(taskId: string, summary: string) {
+  async submitReport(taskId: string, summary: string) {
+    await this.charge();
+    const text = multiLine(summary, MAX_REPORT);
     return this.write(() => {
       const t = this.task(taskId);
+      if (t.mode !== "agent" || t.summary) throw new UserError("This task already has a report.");
+      if (text.length < 20) throw new UserError("Report is too short.");
       const missing = t.subtasks.filter((s) => !s.deliverable);
-      if (!t.planned || missing.length) throw new Error(`Submit all deliverables first (${missing.length} missing).`);
-      t.summary = summary.trim();
+      if (!t.planned || missing.length) throw new UserError(`Submit all deliverables first (${missing.length} missing).`);
+      t.summary = text;
       t.summaryAt = Date.now();
       return this.viewTask(t, Date.now());
     });
@@ -231,9 +284,11 @@ export class Office {
 
   /** Finish an agent task with templates (user didn't want to wait for an agent). */
   async finishWithTemplates(taskId: string) {
+    await this.charge();
     const view = await this.write(() => {
       const t = this.task(taskId);
-      if (t.summary) throw new Error("المهمة دي خلصت خلاص.");
+      if (t.summary) throw new UserError("المهمة دي خلصت خلاص.");
+      if (t.mode === "auto") throw new UserError("المهمة دي شغالة بالقوالب بالفعل.");
       t.mode = "auto";
       return this.viewTask(t, Date.now());
     });
@@ -252,10 +307,10 @@ export class Office {
   // ---- commands -------------------------------------------------------------
 
   private hireSync(input: HireInput): HireResult {
-    const jobTitle = input.jobTitle.trim().slice(0, 80);
-    const jobDescription = input.jobDescription.trim().slice(0, 2000);
-    if (!jobTitle) throw new Error("لازم تكتب المسمى الوظيفي.");
-    if (this.data.employees.length >= MAX_TEAM) throw new Error(`المكتب مليان: أقصى عدد ${MAX_TEAM} موظف.`);
+    const jobTitle = oneLine(input.jobTitle, 80);
+    const jobDescription = oneLine(input.jobDescription, 2000);
+    if (!jobTitle) throw new UserError("لازم تكتب المسمى الوظيفي.");
+    if (this.data.employees.length >= MAX_TEAM) throw new UserError(`المكتب مليان: أقصى عدد ${MAX_TEAM} موظف.`);
 
     const used = new Set(this.data.employees.map((e) => e.desk));
     let desk = 0;
@@ -266,7 +321,7 @@ export class Office {
     const taken = new Set(this.data.employees.map((e) => e.name));
     const pool = look % 2 ? MALE : FEMALE;
     const name =
-      input.name?.trim().slice(0, 30) || pool.find((n) => !taken.has(n)) || `موظف ${this.data.employees.length + 1}`;
+      oneLine(input.name, 30) || pool.find((n) => !taken.has(n)) || `موظف ${this.data.employees.length + 1}`;
 
     const employee: Employee = {
       id: randomUUID(),
@@ -286,22 +341,25 @@ export class Office {
 
   private fireSync(employeeId: string): string {
     const e = this.data.employees.find((x) => x.id === employeeId);
-    if (!e) throw new Error("الموظف ده مش موجود.");
-    if (e.roleId === "general_manager" || e.roleId === "hr_manager") throw new Error("مينفعش تستغنى عن المدير العام أو مديرة الموارد البشرية.");
+    if (!e) throw new UserError("الموظف ده مش موجود.");
+    // Only the founding GM and HR (fixed desks) are permanent.
+    if (e.desk < 0) throw new UserError("مينفعش تستغنى عن المدير العام أو مديرة الموارد البشرية.");
     const now = Date.now();
-    const busy = this.data.tasks.some((t) =>
-      t.subtasks.some((s) => s.assigneeId === e.id && subtaskState(s, now).status !== "done" && now - t.createdAt < STALE_MS),
+    const busy = this.data.tasks.some(
+      (t) =>
+        this.taskStatus(t, now) !== "done" &&
+        t.subtasks.some((s) => s.assigneeId === e.id && subtaskState(s, now).status !== "done"),
     );
-    if (busy) throw new Error(`${e.name} شغال على مهمة دلوقتي. استنى لما يخلص.`);
+    if (busy) throw new UserError(`${e.name} شغال على مهمة دلوقتي. استنى لما يخلص.`);
     this.data.employees = this.data.employees.filter((x) => x.id !== employeeId);
     return `تم الاستغناء عن ${e.name}.`;
   }
 
   private createTask(request: string, mode: "agent" | "auto"): TaskView {
-    const text = request.trim().slice(0, 1000);
-    if (!text) throw new Error("اكتب الطلب الأول.");
+    const text = oneLine(request, 1000);
+    if (!text) throw new UserError("اكتب الطلب الأول.");
     if (!this.data.employees.some((e) => e.roleId !== "general_manager" && e.roleId !== "hr_manager"))
-      throw new Error("مفيش موظفين يشتغلوا على الطلب. عيّن موظفين من الموارد البشرية الأول.");
+      throw new UserError("مفيش موظفين يشتغلوا على الطلب. عيّن موظفين من الموارد البشرية الأول.");
     const task: Task = {
       id: randomUUID(),
       request: text,
@@ -313,13 +371,13 @@ export class Office {
       mode,
     };
     this.data.tasks.unshift(task);
-    this.data.tasks = this.data.tasks.slice(0, 30);
+    this.data.tasks = this.data.tasks.slice(0, MAX_TASKS);
     return this.viewTask(task, task.createdAt);
   }
 
   private task(id: string) {
     const t = this.data.tasks.find((x) => x.id === id);
-    if (!t) throw new Error("task gone");
+    if (!t) throw new UserError(`المهمة دي مش موجودة (no task with id ${id}; call get_pending_work for open task ids).`);
     return t;
   }
 
@@ -344,6 +402,7 @@ export class Office {
 
   /** The GM's plan becomes timed subtasks; the team gathers briefly first. */
   private applyPlan(t: Task, plan: Plan) {
+    if (t.planned) return;
     const now = Date.now();
     const byId = new Map(this.data.employees.map((e) => [e.id, e]));
     t.understanding = plan.understanding;
@@ -375,19 +434,35 @@ export class Office {
   /** Runs whatever is left of a task with the given brain: plan, deliverables, report. */
   private async run(taskId: string, brain: Brain) {
     const { request } = this.task(taskId);
-    const team = [...this.data.employees];
-    const byId = new Map(team.map((e) => [e.id, e]));
 
     if (!this.task(taskId).planned) {
+      const team = [...this.data.employees];
       let plan: Plan = await this.think(taskId, "plan", brain, () => brain.plan(request, team), () => this.mock.plan(request, team));
-      if (!plan.subtasks.length) plan = await this.mock.plan(request, team);
-      await this.write(() => this.applyPlan(this.task(taskId), plan));
+      // The team may have changed while planning: plan again with the current one if needed.
+      const current = new Set(this.data.employees.map((e) => e.id));
+      if (!plan.subtasks.some((p) => current.has(p.assigneeId))) plan = await this.mock.plan(request, this.data.employees);
+      await this.write(() => {
+        const t = this.task(taskId);
+        this.applyPlan(t, plan);
+        if (!t.subtasks.length) t.error = "مفيش موظفين متاحين للمهمة دي.";
+      });
     }
     const understanding = this.task(taskId).understanding ?? "";
+    const byId = new Map(this.data.employees.map((e) => [e.id, e]));
 
     const results = await Promise.all(
       this.task(taskId).subtasks.map(async (s) => {
-        const emp = byId.get(s.assigneeId)!;
+        // Someone who left keeps their slot, written by a stand-in.
+        const emp: Employee = byId.get(s.assigneeId) ?? {
+          id: s.assigneeId,
+          name: "موظف سابق",
+          roleId: "specialist",
+          title: "Specialist",
+          jobDescription: "",
+          desk: 0,
+          hiredAt: 0,
+          look: 0,
+        };
         if (s.deliverable) return { employee: emp, title: s.title, deliverable: s.deliverable };
         const brief = { assigneeId: s.assigneeId, title: s.title, brief: s.brief };
         const deliverable = await this.think(
@@ -415,6 +490,7 @@ export class Office {
       );
       await this.write(() => {
         const t = this.task(taskId);
+        if (t.summary) return; // an agent may have finished it meanwhile
         t.summary = summary;
         t.summaryAt = Date.now();
       });
@@ -423,9 +499,14 @@ export class Office {
 
   // ---- views ----------------------------------------------------------------
 
+  /**
+   * For the model: agent tasks show their real state (submitted work and report)
+   * without waiting for the office animation to catch up.
+   */
   private getTaskSync(id: string): TaskView | undefined {
     const t = this.data.tasks.find((x) => x.id === id);
-    return t && this.viewTask(t, Date.now());
+    if (!t) return undefined;
+    return this.viewTask(t, t.mode === "agent" ? Number.MAX_SAFE_INTEGER : Date.now());
   }
 
   private snapshotSync(): OfficeSnapshot {
@@ -455,17 +536,19 @@ export class Office {
     let doingProgress: number | undefined;
     let completed = 0;
 
-    for (const t of this.data.tasks)
+    for (const t of this.data.tasks) {
+      const taskDone = this.taskStatus(t, now) === "done";
       for (const s of t.subtasks) {
         if (s.assigneeId !== e.id) continue;
         const st = subtaskState(s, now);
         if (st.status === "done") completed++;
-        else if (st.status === "working") {
+        else if (st.status === "working" && !taskDone) {
           activity = "working";
           doing = s.title;
           doingProgress = st.progress;
         }
       }
+    }
 
     if (e.roleId === "general_manager") {
       if (ctx.planning.length) activity = "meeting";
